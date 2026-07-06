@@ -1,0 +1,168 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f6f8fa;
+  color: #111827;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  direction: rtl;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Arabic", "Tahoma", sans-serif;
+  background:
+    radial-gradient(circle at 78% 0%, rgba(18, 140, 126, 0.12), transparent 340px),
+    linear-gradient(180deg, rgba(236, 253, 245, 0.84), rgba(246, 248, 250, 0) 320px),
+    #f6f8fa;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+select.premium-select option {
+  background: #ffffff;
+  color: #111827;
+  font-weight: 600;
+}
+
+select.premium-select option:checked {
+  background: #ecfdf5;
+  color: #075e54;
+}
+
+select.premium-select option:disabled {
+  color: #9ca3af;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9d3d7;
+  border-radius: 999px;
+  border: 2px solid #f6f8fa;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.whatsapp-chat-bg {
+  background-color: #efeae2;
+  background-image:
+    radial-gradient(circle at 12px 12px, rgba(17, 109, 77, 0.06) 1.5px, transparent 1.5px),
+    radial-gradient(circle at 36px 36px, rgba(81, 81, 81, 0.045) 1.5px, transparent 1.5px);
+  background-size: 48px 48px;
+}
+
+.swal2-container {
+  direction: rtl;
+  font-family: inherit;
+}
+
+.swal2-popup.taradi-swal-popup {
+  width: min(500px, calc(100vw - 2rem));
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(18, 140, 126, 0.12), transparent 180px),
+    linear-gradient(180deg, #ffffff, #f8fafc);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
+  padding: 1.75rem;
+}
+
+.taradi-swal-title {
+  padding: 0;
+  color: #111827;
+  font-size: 1.45rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.8;
+}
+
+.taradi-swal-html {
+  margin: 0.65rem 0 0;
+  color: #64748b;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.9;
+}
+
+.taradi-swal-icon {
+  margin: 0.25rem auto 1rem;
+  border-width: 3px;
+  transform: scale(1.05);
+}
+
+.taradi-swal-actions {
+  width: 100%;
+  gap: 0.75rem;
+  margin: 1.65rem 0 0;
+}
+
+.taradi-swal-confirm,
+.taradi-swal-cancel {
+  min-width: 148px;
+  height: 50px;
+  border-radius: 14px;
+  padding: 0 1.25rem;
+  font-size: 0.98rem;
+  font-weight: 900;
+  outline: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+
+.taradi-swal-confirm {
+  background: #0a6c61;
+  color: #ffffff;
+  box-shadow: 0 12px 30px rgba(10, 108, 97, 0.22);
+}
+
+.taradi-swal-confirm:hover {
+  background: #075e54;
+  transform: translateY(-1px);
+}
+
+.taradi-swal-confirm-danger {
+  background: #dc2626;
+  box-shadow: 0 12px 30px rgba(220, 38, 38, 0.2);
+}
+
+.taradi-swal-confirm-danger:hover {
+  background: #b91c1c;
+}
+
+.taradi-swal-cancel {
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.07);
+}
+
+.taradi-swal-cancel:hover {
+  border-color: #b7ece4;
+  background: #ecfdf5;
+  transform: translateY(-1px);
+}
+
+.taradi-swal-confirm:focus,
+.taradi-swal-cancel:focus {
+  box-shadow: 0 0 0 4px rgba(18, 140, 126, 0.16), 0 12px 30px rgba(15, 23, 42, 0.12);
+}

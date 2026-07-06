@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taradi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: taradi
+      POSTGRES_USER: taradi
+      POSTGRES_PASSWORD: taradi_local_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - taradi_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taradi -d taradi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - taradi_local
+
+  redis:
+    image: redis:7-alpine
+    container_name: taradi-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - taradi_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - taradi_local
+
+volumes:
+  taradi_postgres_data:
+  taradi_redis_data:
+
+networks:
+  taradi_local:
+    name: taradi-local

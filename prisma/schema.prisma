@@ -1,0 +1,292 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+  EMPLOYEE
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  RECEIVED
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum MessageType {
+  TEXT
+  TEMPLATE
+  IMAGE
+  AUDIO
+  VOICE
+  VIDEO
+  DOCUMENT
+  STICKER
+  INTERACTIVE
+  SYSTEM
+  UNKNOWN
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+enum ConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PAID
+  SCHEDULED
+  DISPUTED
+  CANCELLED
+}
+
+enum CollectionStatus {
+  ACTIVE_DEBT
+  PAID
+  PARTIALLY_PAID
+  PROMISED_TO_PAY
+  DISPUTED
+  DO_NOT_CONTACT
+}
+
+enum EmployeeActivityType {
+  LOGIN
+  SENT_MESSAGE
+  READ_CHAT
+  UPDATED_CUSTOMER
+  ASSIGNED_CUSTOMER
+  CHANGED_CONVERSATION_STATUS
+  NONE
+}
+
+model User {
+  id                    String              @id @default(uuid())
+  email                 String?             @unique
+  employeeCode          String?             @unique
+  passwordHash          String
+  name                  String
+  role                  Role                @default(EMPLOYEE)
+  supervisorId          String?
+  supervisor            User?               @relation("SupervisorEmployees", fields: [supervisorId], references: [id], onDelete: SetNull)
+  directReports         User[]              @relation("SupervisorEmployees")
+  isActive              Boolean             @default(true)
+  createdCustomers      Customer[]          @relation("CustomerCreatedBy")
+  assignedCustomers     Customer[]          @relation("AssignedCustomers")
+  assignedConversations Conversation[]      @relation("AssignedConversations")
+  sentMessages          Message[]           @relation("SentMessages")
+  readStates            CustomerReadState[]
+  lastLoginAt           DateTime?
+  lastActivityAt        DateTime?
+  lastSeenAt            DateTime?
+  lastActivityType      EmployeeActivityType @default(NONE)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([supervisorId])
+  @@index([lastActivityAt])
+  @@index([lastSeenAt])
+}
+
+model Permission {
+  id              String           @id @default(uuid())
+  key             String           @unique
+  nameAr          String
+  descriptionAr   String?
+  category        String
+  rolePermissions RolePermission[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model RolePermission {
+  id            String     @id @default(uuid())
+  role          Role
+  permissionKey String
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade, onUpdate: Cascade)
+  enabled       Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([role, permissionKey])
+  @@index([permissionKey])
+}
+
+model WebhookEvent {
+  id                String             @id @default(uuid())
+  provider          String             @default("WHATSAPP")
+  eventType         String
+  whatsappMessageId String?
+  payload           Json
+  headers           Json?
+  status            WebhookEventStatus @default(RECEIVED)
+  errorMessage      String?
+  processedAt       DateTime?
+  createdAt         DateTime           @default(now())
+
+  @@index([provider, eventType])
+  @@index([status, createdAt])
+  @@index([whatsappMessageId])
+}
+
+model Customer {
+  id                  String              @id @default(uuid())
+  name                String?
+  phone               String              @unique
+  fullName            String
+  nationalId          String?             @unique
+  accountNumber       String              @unique
+  projectName         String
+  debtAmount          Decimal             @default(0) @db.Decimal(14, 2)
+  serviceNumber       String
+  serviceActivationDate DateTime?
+  serviceTerminationDate DateTime?
+  invoiceStatus       InvoiceStatus       @default(UNPAID)
+  collectionStatus    CollectionStatus    @default(ACTIVE_DEBT)
+  paidAt              DateTime?
+  paidAmount          Decimal?            @db.Decimal(14, 2)
+  paymentReference    String?
+  paymentNotes        String?
+  debtYear            Int
+  notes               String?
+  tags                String[]            @default([])
+  whatsappProfileName String?
+  assignedToId        String?
+  assignedTo          User?               @relation("AssignedCustomers", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById         String?
+  createdBy           User?               @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  phones              CustomerPhone[]
+  messages            Message[]
+  conversation        Conversation?
+  readStates          CustomerReadState[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([assignedToId])
+  @@index([phone])
+  @@index([accountNumber])
+  @@index([projectName])
+  @@index([serviceNumber])
+  @@index([invoiceStatus])
+  @@index([collectionStatus])
+  @@index([paidAt])
+  @@index([debtYear])
+}
+
+model CustomerPhone {
+  id          String   @id @default(uuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  phoneNumber String   @unique
+  isPrimary   Boolean  @default(false)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([isPrimary])
+  @@index([position])
+}
+
+model Message {
+  id                          String           @id @default(uuid())
+  customerId                  String
+  customer                    Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  conversationId              String?
+  conversation                Conversation?    @relation("ConversationMessages", fields: [conversationId], references: [id], onDelete: SetNull)
+  direction                   MessageDirection
+  type                        MessageType      @default(TEXT)
+  content                     String?
+  body                        String?
+  mediaUrl                    String?
+  mediaId                     String?
+  mimeType                    String?
+  fileName                    String?
+  fileSize                    Int?
+  caption                     String?
+  duration                    Int?
+  templateName                String?
+  whatsappMessageId           String?          @unique
+  status                      MessageStatus    @default(QUEUED)
+  statusUpdatedAt             DateTime?
+  sentByUserId                String?
+  sentByUser                  User?            @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  rawPayload                  Json?
+  error                       String?
+  lastMessageForConversations Conversation[]   @relation("ConversationLastMessage")
+  createdAt                   DateTime         @default(now())
+  updatedAt                   DateTime         @updatedAt
+
+  @@index([customerId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([direction, status])
+  @@index([whatsappMessageId])
+  @@index([mediaId])
+}
+
+model Conversation {
+  id                 String               @id @default(uuid())
+  customerId         String               @unique
+  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  assignedEmployeeId String?
+  assignedEmployee   User?                @relation("AssignedConversations", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  status             ConversationStatus   @default(OPEN)
+  lastMessageId      String?
+  lastMessage        Message?             @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+  lastMessageAt      DateTime?
+  unreadCount        Int                  @default(0)
+  priority           ConversationPriority @default(NORMAL)
+  tags               String[]             @default([])
+  archivedAt         DateTime?
+  messages           Message[]            @relation("ConversationMessages")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([assignedEmployeeId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@index([priority])
+}
+
+model CustomerReadState {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([customerId, userId])
+  @@index([userId])
+  @@index([customerId])
+}

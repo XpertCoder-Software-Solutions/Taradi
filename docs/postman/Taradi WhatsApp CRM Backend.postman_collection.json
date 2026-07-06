@@ -1,0 +1,328 @@
+{
+  "info": {
+    "_postman_id": "e2216f1c-e109-4f1c-8711-0ad4da390b59",
+    "name": "Taradi WhatsApp CRM Backend",
+    "description": "Local API smoke tests for the Taradi WhatsApp CRM backend MVP.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Admin Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('login ok', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.environment.set('adminToken', json.data.token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "Create Employee",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.environment.set('employeeEmail', `employee.${Date.now()}@taradi.local`);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('employee created', function () { pm.response.to.have.status(201); });",
+              "const json = pm.response.json();",
+              "pm.environment.set('employeeId', json.data.employee.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Employee One\",\n  \"email\": \"{{employeeEmail}}\",\n  \"password\": \"{{employeePassword}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/employees",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "employees"]
+        }
+      }
+    },
+    {
+      "name": "Create Customer",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.environment.set('customerPhone', `20100${Date.now()}`);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('customer created', function () { pm.response.to.have.status(201); });",
+              "const json = pm.response.json();",
+              "pm.environment.set('customerId', json.data.customer.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Taradi Test Customer\",\n  \"phone\": \"{{customerPhone}}\",\n  \"notes\": \"Created from Postman\",\n  \"tags\": [\"test\", \"postman\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/customers",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "customers"]
+        }
+      }
+    },
+    {
+      "name": "Assign Customer To Employee",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"employeeId\": \"{{employeeId}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/customers/{{customerId}}/assign",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "customers", "{{customerId}}", "assign"]
+        }
+      }
+    },
+    {
+      "name": "Employee Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('employee login ok', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.environment.set('employeeToken', json.data.token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{employeeEmail}}\",\n  \"password\": \"{{employeePassword}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "Employee List Assigned Customers",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{employeeToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/customers",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "customers"]
+        }
+      }
+    },
+    {
+      "name": "Admin List All Chats",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/inbox",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "inbox"]
+        }
+      }
+    },
+    {
+      "name": "WhatsApp Webhook GET Verification",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/whatsapp/webhook?hub.mode=subscribe&hub.verify_token={{webhookVerifyToken}}&hub.challenge=taradi-local-challenge",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "whatsapp", "webhook"],
+          "query": [
+            {
+              "key": "hub.mode",
+              "value": "subscribe"
+            },
+            {
+              "key": "hub.verify_token",
+              "value": "{{webhookVerifyToken}}"
+            },
+            {
+              "key": "hub.challenge",
+              "value": "taradi-local-challenge"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "WhatsApp Webhook POST Inbound Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"local-waba-id\",\n      \"changes\": [\n        {\n          \"field\": \"messages\",\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"201000000000\",\n              \"phone_number_id\": \"local-phone-number-id\"\n            },\n            \"contacts\": [\n              {\n                \"profile\": { \"name\": \"Inbound Test Customer\" },\n                \"wa_id\": \"201009998888\"\n              }\n            ],\n            \"messages\": [\n              {\n                \"from\": \"201009998888\",\n                \"id\": \"wamid.LOCAL.INBOUND.POSTMAN.001\",\n                \"timestamp\": \"1720000000\",\n                \"text\": { \"body\": \"Hello from Postman\" },\n                \"type\": \"text\"\n              }\n            ]\n          }\n        }\n      ]\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/whatsapp/webhook",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "whatsapp", "webhook"]
+        }
+      }
+    },
+    {
+      "name": "Send Manual Chat Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"Hello from Taradi CRM\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/customers/{{customerId}}/messages",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "customers", "{{customerId}}", "messages"]
+        }
+      }
+    },
+    {
+      "name": "Create Bulk Template Campaign",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminToken}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerIds\": [\"{{customerId}}\"],\n  \"templateName\": \"hello_world\",\n  \"languageCode\": \"en_US\",\n  \"components\": []\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/whatsapp/templates/bulk",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "whatsapp", "templates", "bulk"]
+        }
+      }
+    }
+  ]
+}

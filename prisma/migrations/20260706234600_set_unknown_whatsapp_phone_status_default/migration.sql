@@ -1,0 +1,2 @@
+ALTER TABLE "CustomerPhone"
+ALTER COLUMN "whatsappStatus" SET DEFAULT 'UNKNOWN';
