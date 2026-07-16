@@ -52,6 +52,7 @@ enum ConversationStatus {
   OPEN
   PENDING
   CLOSED
+  ARCHIVED
 }
 
 enum ConversationPriority {
@@ -88,32 +89,71 @@ enum EmployeeActivityType {
   NONE
 }
 
+enum CampaignStatus {
+  DRAFT
+  PREPARING
+  READY
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
 model User {
-  id                    String              @id @default(uuid())
-  email                 String?             @unique
-  employeeCode          String?             @unique
-  passwordHash          String
-  name                  String
-  role                  Role                @default(EMPLOYEE)
-  supervisorId          String?
-  supervisor            User?               @relation("SupervisorEmployees", fields: [supervisorId], references: [id], onDelete: SetNull)
-  directReports         User[]              @relation("SupervisorEmployees")
-  isActive              Boolean             @default(true)
-  createdCustomers      Customer[]          @relation("CustomerCreatedBy")
-  assignedCustomers     Customer[]          @relation("AssignedCustomers")
-  assignedConversations Conversation[]      @relation("AssignedConversations")
-  sentMessages          Message[]           @relation("SentMessages")
-  readStates            CustomerReadState[]
-  lastLoginAt           DateTime?
-  lastActivityAt        DateTime?
-  lastSeenAt            DateTime?
-  lastActivityType      EmployeeActivityType @default(NONE)
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  id                                    String                          @id @default(uuid())
+  email                                 String?                         @unique
+  employeeCode                          String?                         @unique
+  phone                                 String?                         @unique
+  passwordHash                          String
+  mustChangePassword                    Boolean                         @default(false)
+  name                                  String
+  role                                  Role                            @default(EMPLOYEE)
+  supervisorId                          String?
+  supervisor                            User?                           @relation("SupervisorEmployees", fields: [supervisorId], references: [id], onDelete: SetNull)
+  directReports                         User[]                          @relation("SupervisorEmployees")
+  isActive                              Boolean                         @default(true)
+  createdCustomers                      Customer[]                      @relation("CustomerCreatedBy")
+  assignedCustomers                     Customer[]                      @relation("AssignedCustomers")
+  assignedConversations                 Conversation[]                  @relation("AssignedConversations")
+  archivedConversations                 Conversation[]                  @relation("ConversationArchivedBy")
+  previousConversationAssignments       Conversation[]                  @relation("ConversationPreviousAssignee")
+  receivedConversationReassignments     Conversation[]                  @relation("ConversationReassignedTo")
+  conversationReassignmentsMade         ConversationAssignmentHistory[] @relation("ConversationReassignedBy")
+  previousConversationAssignmentHistory ConversationAssignmentHistory[] @relation("ConversationHistoryPreviousAssignee")
+  newConversationAssignmentHistory      ConversationAssignmentHistory[] @relation("ConversationHistoryNewAssignee")
+  sentMessages                          Message[]                       @relation("SentMessages")
+  createdCampaigns                      Campaign[]                      @relation("CampaignCreatedBy")
+  readStates                            CustomerReadState[]
+  lastLoginAt                           DateTime?
+  lastActivityAt                        DateTime?
+  lastSeenAt                            DateTime?
+  lastActivityType                      EmployeeActivityType            @default(NONE)
+  createdAt                             DateTime                        @default(now())
+  updatedAt                             DateTime                        @updatedAt
+  userImportAuditLogs                   UserImportAuditLog[]
 
   @@index([supervisorId])
+  @@index([role, isActive])
+  @@index([supervisorId, role, isActive])
   @@index([lastActivityAt])
   @@index([lastSeenAt])
+}
+
+model UserImportAuditLog {
+  id            String   @id @default(uuid())
+  action        String
+  actorUserId   String
+  actor         User     @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  importedCount Int
+  failedCount   Int
+  fileName      String
+  createdAt     DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
 }
 
 model Permission {
@@ -153,52 +193,117 @@ model WebhookEvent {
   createdAt         DateTime           @default(now())
 
   @@index([provider, eventType])
+  @@index([provider, eventType, createdAt])
   @@index([status, createdAt])
   @@index([whatsappMessageId])
+  @@index([whatsappMessageId, status])
 }
 
 model Customer {
-  id                  String              @id @default(uuid())
-  name                String?
-  phone               String              @unique
-  fullName            String
-  nationalId          String?             @unique
-  accountNumber       String              @unique
-  projectName         String
-  debtAmount          Decimal             @default(0) @db.Decimal(14, 2)
-  serviceNumber       String
-  serviceActivationDate DateTime?
-  serviceTerminationDate DateTime?
-  invoiceStatus       InvoiceStatus       @default(UNPAID)
-  collectionStatus    CollectionStatus    @default(ACTIVE_DEBT)
-  paidAt              DateTime?
-  paidAmount          Decimal?            @db.Decimal(14, 2)
-  paymentReference    String?
-  paymentNotes        String?
-  debtYear            Int
-  notes               String?
-  tags                String[]            @default([])
-  whatsappProfileName String?
-  assignedToId        String?
-  assignedTo          User?               @relation("AssignedCustomers", fields: [assignedToId], references: [id], onDelete: SetNull)
-  createdById         String?
-  createdBy           User?               @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  phones              CustomerPhone[]
-  messages            Message[]
-  conversation        Conversation?
-  readStates          CustomerReadState[]
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                            String                          @id @default(uuid())
+  name                          String?
+  phone                         String                          @unique
+  fullName                      String
+  nationalId                    String?                         @unique
+  accountNumber                 String                          @unique
+  projectName                   String
+  projectNameRaw                String?
+  debtAmount                    Decimal                         @default(0) @db.Decimal(14, 2)
+  serviceNumber                 String
+  serviceActivationDate         DateTime?
+  serviceTerminationDate        DateTime?
+  invoiceStatus                 InvoiceStatus                   @default(UNPAID)
+  collectionStatus              CollectionStatus                @default(ACTIVE_DEBT)
+  paidAt                        DateTime?
+  paidAmount                    Decimal?                        @db.Decimal(14, 2)
+  paymentReference              String?
+  paymentNotes                  String?
+  debtYear                      Int
+  source                        String                          @default("MANUAL")
+  notes                         String?
+  tags                          String[]                        @default([])
+  whatsappProfileName           String?
+  assignedToId                  String?
+  assignedTo                    User?                           @relation("AssignedCustomers", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById                   String?
+  createdBy                     User?                           @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  phones                        CustomerPhone[]
+  messages                      Message[]
+  conversations                 Conversation[]
+  conversationAssignmentHistory ConversationAssignmentHistory[]
+  readStates                    CustomerReadState[]
+  debts                         CustomerDebt[]
+  campaignRecipients            CampaignRecipient[]
+  debtAuditLogs                 DebtAuditLog[]
+  createdAt                     DateTime                        @default(now())
+  updatedAt                     DateTime                        @updatedAt
 
   @@index([assignedToId])
+  @@index([assignedToId, createdAt])
+  @@index([assignedToId, collectionStatus, createdAt])
   @@index([phone])
   @@index([accountNumber])
   @@index([projectName])
   @@index([serviceNumber])
   @@index([invoiceStatus])
   @@index([collectionStatus])
+  @@index([collectionStatus, createdAt])
   @@index([paidAt])
   @@index([debtYear])
+  @@index([source])
+}
+
+model CustomerDebt {
+  id                     String              @id @default(uuid())
+  customerId             String
+  customer               Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  projectName            String?
+  projectNameRaw         String?
+  accountNumber          String
+  serviceNumber          String?
+  debtYear               Int
+  debtAmount             Decimal             @db.Decimal(14, 2)
+  invoiceStatus          InvoiceStatus?
+  collectionStatus       CollectionStatus?
+  serviceActivationDate  DateTime?
+  serviceTerminationDate DateTime?
+  paidAmount             Decimal?            @db.Decimal(14, 2)
+  paidAt                 DateTime?
+  paymentReference       String?
+  paymentNotes           String?
+  isActive               Boolean             @default(true)
+  reviewRequired         Boolean             @default(false)
+  reviewReason           String?
+  messages               Message[]
+  campaignRecipients     CampaignRecipient[]
+  auditLogs              DebtAuditLog[]
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@unique([customerId, projectName, accountNumber, serviceNumber, debtYear])
+  @@index([customerId])
+  @@index([customerId, isActive])
+  @@index([projectName])
+  @@index([debtYear])
+  @@index([accountNumber])
+  @@index([serviceNumber])
+  @@index([collectionStatus])
+}
+
+model DebtAuditLog {
+  id         String       @id @default(uuid())
+  debtId     String
+  debt       CustomerDebt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  actorId    String?
+  action     String
+  changes    Json?
+  createdAt  DateTime     @default(now())
+
+  @@index([debtId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 model CustomerPhone {
@@ -212,6 +317,7 @@ model CustomerPhone {
   updatedAt   DateTime @updatedAt
 
   @@index([customerId])
+  @@index([customerId, isPrimary, position])
   @@index([isPrimary])
   @@index([position])
 }
@@ -220,6 +326,10 @@ model Message {
   id                          String           @id @default(uuid())
   customerId                  String
   customer                    Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  campaignId                  String?
+  campaign                    Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  debtId                      String?
+  debt                        CustomerDebt?    @relation(fields: [debtId], references: [id], onDelete: SetNull)
   conversationId              String?
   conversation                Conversation?    @relation("ConversationMessages", fields: [conversationId], references: [id], onDelete: SetNull)
   direction                   MessageDirection
@@ -246,34 +356,201 @@ model Message {
   updatedAt                   DateTime         @updatedAt
 
   @@index([customerId, createdAt])
+  @@index([campaignId])
+  @@index([campaignId, status])
+  @@index([debtId])
   @@index([conversationId, createdAt])
   @@index([direction, status])
+  @@index([status, statusUpdatedAt])
   @@index([whatsappMessageId])
   @@index([mediaId])
 }
 
-model Conversation {
-  id                 String               @id @default(uuid())
-  customerId         String               @unique
-  customer           Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  assignedEmployeeId String?
-  assignedEmployee   User?                @relation("AssignedConversations", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
-  status             ConversationStatus   @default(OPEN)
-  lastMessageId      String?
-  lastMessage        Message?             @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
-  lastMessageAt      DateTime?
-  unreadCount        Int                  @default(0)
-  priority           ConversationPriority @default(NORMAL)
-  tags               String[]             @default([])
-  archivedAt         DateTime?
-  messages           Message[]            @relation("ConversationMessages")
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+model Campaign {
+  id                  String              @id @default(uuid())
+  idempotencyKey      String?             @unique
+  templateId          String?
+  templateName        String
+  languageCode        String
+  selectionMode       String              @default("explicit")
+  filters             Json?
+  excludedCustomerIds String[]            @default([])
+  excludedDebtIds     String[]            @default([])
+  status              CampaignStatus      @default(DRAFT)
+  selectedCount       Int                 @default(0)
+  eligibleCount       Int                 @default(0)
+  queuedCount         Int                 @default(0)
+  sentCount           Int                 @default(0)
+  deliveredCount      Int                 @default(0)
+  readCount           Int                 @default(0)
+  failedCount         Int                 @default(0)
+  skippedCount        Int                 @default(0)
+  pendingCount        Int                 @default(0)
+  error               String?
+  rawPayload          Json?
+  createdById         String?
+  createdBy           User?               @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  startedAt           DateTime?
+  preparedAt          DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  messages            Message[]
+  recipients          CampaignRecipient[]
 
-  @@index([assignedEmployeeId])
   @@index([status])
+  @@index([createdById])
+  @@index([templateId])
+  @@index([createdAt])
+}
+
+model CampaignRecipient {
+  id                         String        @id @default(uuid())
+  campaignId                 String
+  campaign                   Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId                 String
+  customer                   Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  debtId                     String
+  debt                       CustomerDebt  @relation(fields: [debtId], references: [id], onDelete: Restrict)
+  phoneSnapshot              String?
+  projectSnapshot            String?
+  accountNumberSnapshot      String?
+  serviceNumberSnapshot      String?
+  debtYearSnapshot           Int?
+  debtAmountSnapshot         Decimal?      @db.Decimal(14, 2)
+  resolvedTemplateParameters Json?
+  eligible                   Boolean       @default(false)
+  skipReason                 String?
+  sendStatus                 MessageStatus @default(QUEUED)
+  messageId                  String?
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+
+  @@unique([campaignId, debtId])
+  @@index([campaignId, eligible])
+  @@index([customerId])
+  @@index([debtId])
+}
+
+model WhatsappTemplate {
+  id               String                            @id @default(uuid())
+  metaTemplateId   String?                           @unique
+  name             String
+  language         String
+  category         String?
+  status           String                            @default("UNKNOWN")
+  components       Json?
+  qualityScore     Json?
+  rejectedReason   String?
+  headerType       String?
+  headerText       String?
+  body             String?
+  footer           String?
+  buttons          Json?
+  variables        Json?
+  rawMetaResponse  Json?
+  isActive         Boolean                           @default(true)
+  lastSyncedAt     DateTime?
+  variableMappings WhatsappTemplateVariableMapping[]
+  createdAt        DateTime                          @default(now())
+  updatedAt        DateTime                          @updatedAt
+
+  @@unique([name, language])
+  @@index([status])
+  @@index([category])
+  @@index([language])
+  @@index([isActive, status])
+  @@index([lastSyncedAt])
+}
+
+model WhatsappTemplateVariableMapping {
+  id                String           @id @default(uuid())
+  templateId        String
+  template          WhatsappTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  language          String
+  variableKey       String
+  placeholderNumber Int
+  componentType     String
+  buttonIndex       Int?
+  source            String?
+  sourceScope       String           @default("customer")
+  fieldKey          String
+  transformer       String?
+  fallbackValue     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([templateId, language, variableKey])
+  @@index([templateId])
+  @@index([language])
+  @@index([fieldKey])
+}
+
+model Conversation {
+  id                        String                          @id @default(uuid())
+  customerId                String
+  activeKey                 String?                         @unique
+  customer                  Customer                        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  assignedEmployeeId        String?
+  assignedEmployee          User?                           @relation("AssignedConversations", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  status                    ConversationStatus              @default(OPEN)
+  lastMessageId             String?
+  lastMessage               Message?                        @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+  lastMessageAt             DateTime?
+  unreadCount               Int                             @default(0)
+  priority                  ConversationPriority            @default(NORMAL)
+  tags                      String[]                        @default([])
+  archivedAt                DateTime?
+  archivedById              String?
+  archivedBy                User?                           @relation("ConversationArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  archiveReason             String?
+  previousAssigneeId        String?
+  previousAssignee          User?                           @relation("ConversationPreviousAssignee", fields: [previousAssigneeId], references: [id], onDelete: SetNull)
+  reassignedToId            String?
+  reassignedTo              User?                           @relation("ConversationReassignedTo", fields: [reassignedToId], references: [id], onDelete: SetNull)
+  reassignedAt              DateTime?
+  messages                  Message[]                       @relation("ConversationMessages")
+  archivedAssignmentHistory ConversationAssignmentHistory[] @relation("ArchivedConversationHistory")
+  activeAssignmentHistory   ConversationAssignmentHistory[] @relation("ActiveConversationHistory")
+  createdAt                 DateTime                        @default(now())
+  updatedAt                 DateTime                        @updatedAt
+
+  @@index([customerId])
+  @@index([assignedEmployeeId])
+  @@index([assignedEmployeeId, lastMessageAt])
+  @@index([assignedEmployeeId, status, lastMessageAt])
+  @@index([status])
+  @@index([status, lastMessageAt])
   @@index([lastMessageAt])
   @@index([priority])
+  @@index([archivedAt])
+  @@index([previousAssigneeId])
+  @@index([reassignedToId])
+}
+
+model ConversationAssignmentHistory {
+  id                     String        @id @default(uuid())
+  customerId             String
+  customer               Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  archivedConversationId String?
+  archivedConversation   Conversation? @relation("ArchivedConversationHistory", fields: [archivedConversationId], references: [id], onDelete: SetNull)
+  activeConversationId   String?
+  activeConversation     Conversation? @relation("ActiveConversationHistory", fields: [activeConversationId], references: [id], onDelete: SetNull)
+  previousAssigneeId     String?
+  previousAssignee       User?         @relation("ConversationHistoryPreviousAssignee", fields: [previousAssigneeId], references: [id], onDelete: SetNull)
+  newAssigneeId          String?
+  newAssignee            User?         @relation("ConversationHistoryNewAssignee", fields: [newAssigneeId], references: [id], onDelete: SetNull)
+  reassignedById         String?
+  reassignedBy           User?         @relation("ConversationReassignedBy", fields: [reassignedById], references: [id], onDelete: SetNull)
+  reason                 String?
+  createdAt              DateTime      @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([archivedConversationId])
+  @@index([activeConversationId])
+  @@index([previousAssigneeId])
+  @@index([newAssigneeId])
+  @@index([reassignedById])
 }
 
 model CustomerReadState {

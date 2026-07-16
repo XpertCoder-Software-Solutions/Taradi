@@ -2,11 +2,11 @@ const env = require("../config/env");
 const logger = require("../config/logger");
 const prisma = require("../config/prisma");
 const {
-  dispatchWebhook,
   detectWebhookEventType,
   extractWhatsappMessageId,
   getWebhookChanges
 } = require("../webhooks/dispatcher");
+const { enqueueWebhookEvent } = require("../queues/webhook.queue");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const sanitizeHeaders = require("../utils/sanitizeHeaders");
@@ -135,12 +135,23 @@ const receiveWebhook = asyncHandler(async (req, res) => {
     status: auditEvent.status
   });
 
-  const summary = await dispatchWebhook(req.body, auditEvent.id);
+  const job = await enqueueWebhookEvent(auditEvent.id, {
+    eventType,
+    whatsappMessageId,
+    receivedAt: auditEvent.createdAt ? auditEvent.createdAt.toISOString() : new Date().toISOString()
+  });
 
   res.success({
     auditEventId: auditEvent.id,
     eventType,
-    summary
+    queued: true,
+    job: {
+      id: job.id,
+      queue: "whatsapp-webhook-processing"
+    },
+    summary: {
+      status: "QUEUED"
+    }
   });
 });
 

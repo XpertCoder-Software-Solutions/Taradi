@@ -143,6 +143,17 @@ const swaggerSpec = swaggerJSDoc({
               items: { type: "string", format: "uuid" },
               example: ["0c5f77f3-f8b6-4db0-9641-9a4d8f968a7a"]
             },
+            users: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  userId: { type: "string", format: "uuid" },
+                  isOnline: { type: "boolean", example: true },
+                  lastSeenAt: { type: "string", format: "date-time", nullable: true }
+                }
+              }
+            },
             lastSeen: {
               type: "object",
               additionalProperties: {
@@ -332,7 +343,8 @@ const swaggerSpec = swaggerJSDoc({
             phoneNumbersCount: { type: "integer", example: 3 },
             nationalId: { type: "string", nullable: true, example: "1234567890" },
             accountNumber: { type: "string", example: "ACC-1001" },
-            projectName: { type: "string", example: "STC" },
+            projectName: { type: "string", example: "STC", description: "Normalized project/company name." },
+            projectNameRaw: { type: "string", nullable: true, example: "اس تي سي", description: "Original project/company value received from import or API input." },
             debtAmount: { type: "string", example: "2500.75" },
             serviceNumber: { type: "string", example: "SVC-9988" },
             serviceActivationDate: { type: "string", format: "date-time", nullable: true },
@@ -355,6 +367,11 @@ const swaggerSpec = swaggerJSDoc({
             paymentReference: { type: "string", nullable: true, example: "BANK-123" },
             paymentNotes: { type: "string", nullable: true, example: "تم السداد عبر التحويل البنكي" },
             debtYear: { type: "integer", example: 2021 },
+            source: {
+              type: "string",
+              example: "QUICK_SEND",
+              description: "Creation source. Quick-send lightweight customers use QUICK_SEND."
+            },
             notes: { type: "string", nullable: true },
             tags: {
               type: "array",
@@ -412,7 +429,8 @@ const swaggerSpec = swaggerJSDoc({
             fullName: { type: "string", example: "أحمد علي" },
             nationalId: { type: "string", example: "1234567890", description: "Required and unique." },
             accountNumber: { type: "string", example: "ACC-1001", description: "Required and unique." },
-            projectName: { type: "string", example: "STC" },
+            projectName: { type: "string", example: "موبايلي", description: "Normalized to Mobily, STC, or Zain when matched." },
+            projectNameRaw: { type: "string", nullable: true, example: "موبايلي" },
             debtAmount: { type: "string", example: "2500.75" },
             serviceNumber: { type: "string", example: "SVC-9988" },
             serviceActivationDate: { type: "string", format: "date", nullable: true },
@@ -452,7 +470,8 @@ const swaggerSpec = swaggerJSDoc({
             fullName: { type: "string", example: "أحمد علي" },
             nationalId: { type: "string", example: "1234567890" },
             accountNumber: { type: "string", example: "ACC-1001" },
-            projectName: { type: "string", example: "STC" },
+            projectName: { type: "string", example: "زين", description: "Normalized to Mobily, STC, or Zain when matched." },
+            projectNameRaw: { type: "string", nullable: true, example: "زين" },
             debtAmount: { type: "string", example: "2500.75" },
             serviceNumber: { type: "string", example: "SVC-9988" },
             serviceActivationDate: { type: "string", format: "date", nullable: true },
@@ -549,6 +568,163 @@ const swaggerSpec = swaggerJSDoc({
             updatedAt: { type: "string", format: "date-time" }
           }
         },
+        WhatsappTemplateVariable: {
+          type: "object",
+          properties: {
+            index: { type: "integer", example: 1 },
+            placeholderNumber: { type: "integer", example: 1 },
+            token: { type: "string", example: "{{1}}" },
+            component: { type: "string", example: "body" },
+            componentType: { type: "string", example: "body" },
+            variableKey: { type: "string", example: "body:::1" },
+            buttonIndex: { type: "integer", nullable: true, example: 0 },
+            buttonType: { type: "string", nullable: true, example: "URL" },
+            source: { type: "string", nullable: true, example: "url" }
+          }
+        },
+        WhatsappTemplateVariableMapping: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            templateId: { type: "string", format: "uuid" },
+            language: { type: "string", example: "ar" },
+            variableKey: { type: "string", example: "body:::1" },
+            placeholderNumber: { type: "integer", example: 1 },
+            componentType: { type: "string", example: "body" },
+            buttonIndex: { type: "integer", nullable: true, example: 0 },
+            source: { type: "string", nullable: true, example: "url" },
+            fieldKey: { type: "string", example: "fullName" },
+            transformer: { type: "string", nullable: true, example: "trim" },
+            fallbackValue: { type: "string", nullable: true, example: "غير متوفر" },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" }
+          }
+        },
+        WhatsappTemplateMappingField: {
+          type: "object",
+          properties: {
+            key: { type: "string", example: "debtAmount" },
+            labelAr: { type: "string", example: "المبلغ" },
+            sourceField: { type: "string", example: "debtAmount" },
+            type: { type: "string", example: "Decimal" },
+            defaultTransformer: { type: "string", nullable: true, example: "currency" },
+            sensitive: { type: "boolean", example: false },
+            virtual: { type: "boolean", example: false }
+          }
+        },
+        WhatsappTemplateButton: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            type: { type: "string", example: "QUICK_REPLY" },
+            text: { type: "string", example: "تأكيد" },
+            url: { type: "string", nullable: true, example: "https://example.com/{{1}}" },
+            phone_number: { type: "string", nullable: true, example: "920031288" }
+          }
+        },
+        WhatsappTemplate: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            metaTemplateId: { type: "string", nullable: true, example: "1234567890" },
+            name: { type: "string", example: "payment_reminder" },
+            language: { type: "string", example: "ar" },
+            category: { type: "string", nullable: true, example: "UTILITY" },
+            status: { type: "string", example: "APPROVED" },
+            headerType: { type: "string", nullable: true, example: "TEXT" },
+            headerText: { type: "string", nullable: true, example: "تراضي" },
+            body: { type: "string", nullable: true, example: "السلام عليكم {{1}}، المبلغ {{2}}" },
+            footer: { type: "string", nullable: true, example: "شكرًا لك" },
+            buttons: {
+              type: "array",
+              items: { $ref: "#/components/schemas/WhatsappTemplateButton" }
+            },
+            variables: {
+              type: "array",
+              items: { $ref: "#/components/schemas/WhatsappTemplateVariable" }
+            },
+            rawMetaResponse: { type: "object", nullable: true },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" }
+          }
+        },
+        WhatsappTemplatesResponse: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { $ref: "#/components/schemas/WhatsappTemplate" }
+            },
+            meta: {
+              type: "object",
+              properties: {
+                total: { type: "integer", example: 12 }
+              }
+            }
+          }
+        },
+        WhatsappTemplateSyncResponse: {
+          type: "object",
+          properties: {
+            synced: { type: "integer", example: 18 },
+            created: { type: "integer", example: 3 },
+            updated: { type: "integer", example: 15 },
+            skipped: { type: "integer", example: 0 },
+            meta: {
+              type: "object",
+              properties: {
+                tokenSource: { type: "string", example: "env" },
+                tokenVariable: { type: "string", example: "SYSTEM_USER_TOKEN" },
+                tokenPreview: { type: "string", nullable: true, example: "EAAabc...1234" },
+                configuredTokenVariables: {
+                  type: "array",
+                  items: { type: "string" },
+                  example: ["SYSTEM_USER_TOKEN", "WHATSAPP_TOKEN"]
+                },
+                wabaId: { type: "string", example: "123456789012345" },
+                graphApiEndpoint: {
+                  type: "string",
+                  example: "https://graph.facebook.com/v25.0/123456789012345/message_templates"
+                },
+                metaApiVersion: { type: "string", example: "v25.0" },
+                responses: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      page: { type: "integer", example: 1 },
+                      graphApiEndpoint: { type: "string" },
+                      status: { type: "integer", example: 200 },
+                      responseBody: { type: "object" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        SendWhatsappTemplateRequest: {
+          type: "object",
+          required: ["customerId", "templateName", "language", "parameters"],
+          properties: {
+            customerId: { type: "string", format: "uuid" },
+            templateName: { type: "string", example: "payment_reminder" },
+            language: { type: "string", example: "ar" },
+            parameters: {
+              type: "array",
+              items: { type: "string" },
+              example: ["أحمد", "123456", "920031288"]
+            }
+          }
+        },
+        SendWhatsappTemplateResponse: {
+          type: "object",
+          properties: {
+            message: { $ref: "#/components/schemas/Message" },
+            whatsappMessageId: { type: "string", nullable: true, example: "wamid.HBg..." },
+            template: { $ref: "#/components/schemas/WhatsappTemplate" }
+          }
+        },
         SendMessageRequest: {
           type: "object",
           required: ["text"],
@@ -558,6 +734,29 @@ const swaggerSpec = swaggerJSDoc({
               minLength: 1,
               maxLength: 4096,
               example: "Hello from Taradi CRM"
+            }
+          }
+        },
+        QuickSendRequest: {
+          type: "object",
+          required: ["phone", "message"],
+          properties: {
+            phone: {
+              type: "string",
+              example: "201000000000",
+              description: "Phone number is normalized server-side before matching CustomerPhone records."
+            },
+            message: {
+              type: "string",
+              minLength: 1,
+              maxLength: 4096,
+              example: "نص الرسالة"
+            },
+            assignedToId: {
+              type: "string",
+              format: "uuid",
+              nullable: true,
+              description: "Optional for Admin/Supervisor when a new lightweight customer is created. Employees are always assigned to themselves."
             }
           }
         },
@@ -584,56 +783,94 @@ const swaggerSpec = swaggerJSDoc({
         },
         CreateCampaignRequest: {
           type: "object",
-          required: ["customerIds", "templateName"],
+          required: ["templateId", "selectionMode"],
           properties: {
+            templateId: { type: "string", format: "uuid" },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 128 },
+            selectionMode: { type: "string", enum: ["explicit", "all_matching"], example: "explicit" },
             customerIds: {
               type: "array",
-              minItems: 1,
-              maxItems: 500,
+              description: "Explicit customer ids. No fixed application cap is applied; use all_matching with filters for very large selections.",
               items: { type: "string", format: "uuid" }
             },
-            templateName: { type: "string", example: "hello_world" },
-            languageCode: { type: "string", example: "en_US", default: "en_US" },
-            components: {
+            excludedCustomerIds: {
               type: "array",
-              items: { type: "object" },
-              example: []
+              description: "Optional customer ids to exclude from an all_matching campaign.",
+              items: { type: "string", format: "uuid" }
+            },
+            filters: {
+              type: "object",
+              description: "Used when selectionMode is all_matching. Matches the customer list filters."
+            }
+          }
+        },
+        CampaignPreviewResponse: {
+          type: "object",
+          properties: {
+            totalSelected: { type: "integer", example: 100 },
+            eligibleRecipients: { type: "integer", example: 92 },
+            skippedCustomers: { type: "integer", example: 8 },
+            invalidPhoneNumbers: { type: "integer", example: 2 },
+            estimatedSendCount: { type: "integer", example: 92 },
+            mapping: {
+              type: "object",
+              properties: {
+                isComplete: { type: "boolean" },
+                message: { type: "string", nullable: true },
+                variables: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/WhatsappTemplateVariable" }
+                },
+                mappings: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/WhatsappTemplateVariableMapping" }
+                }
+              }
+            },
+            previews: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  customerId: { type: "string", format: "uuid" },
+                  customerName: { type: "string" },
+                  phone: { type: "string" },
+                  eligible: { type: "boolean" },
+                  warnings: { type: "array", items: { type: "string" } },
+                  resolvedVariables: { type: "array", items: { type: "object" } },
+                  renderedTemplate: { type: "string" }
+                }
+              }
             }
           }
         },
         CampaignResponse: {
           type: "object",
           properties: {
-            totalSelected: { type: "integer", example: 10 },
-            eligibleRecipients: { type: "integer", example: 8 },
-            excludedBlockedCustomers: { type: "integer", example: 2 },
-            excludedCustomers: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  customerId: { type: "string", format: "uuid" },
-                  fullName: { type: "string", example: "أحمد علي" },
-                  reason: { type: "string", example: "تم السداد" }
-                }
-              }
+            campaignId: { type: "string", format: "uuid" },
+            id: { type: "string", format: "uuid" },
+            status: {
+              type: "string",
+              enum: ["DRAFT", "PREPARING", "READY", "QUEUED", "RUNNING", "PAUSED", "COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELLED"],
+              example: "QUEUED"
             },
-            total: { type: "integer", example: 1 },
-            queued: { type: "integer", example: 1 },
-            failed: { type: "integer", example: 0 },
-            results: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  customerId: { type: "string", format: "uuid" },
-                  messageId: { type: "string", format: "uuid" },
-                  jobId: { type: "string" },
-                  status: { type: "string", enum: ["QUEUED", "FAILED"] },
-                  error: { type: "string" }
-                }
-              }
-            }
+            templateId: { type: "string", format: "uuid", nullable: true },
+            templateName: { type: "string", example: "payment_reminder" },
+            languageCode: { type: "string", example: "ar" },
+            selectionMode: { type: "string", enum: ["explicit", "all_matching"], example: "all_matching" },
+            recipientCount: { type: "integer", example: 1000 },
+            selected: { type: "integer", example: 1000 },
+            eligible: { type: "integer", example: 936 },
+            queued: { type: "integer", example: 936 },
+            sent: { type: "integer", example: 120 },
+            delivered: { type: "integer", example: 80 },
+            read: { type: "integer", example: 25 },
+            failed: { type: "integer", example: 2 },
+            skipped: { type: "integer", example: 64 },
+            pending: { type: "integer", example: 734 },
+            progressPercentage: { type: "integer", example: 24 },
+            message: { type: "string", example: "تمت إضافة الحملة إلى قائمة الإرسال" },
+            error: { type: "string", nullable: true }
           }
         },
         InboxItem: {
@@ -662,7 +899,8 @@ const swaggerSpec = swaggerJSDoc({
                 id: { type: "string", format: "uuid" },
                 name: { type: "string", nullable: true },
                 phone: { type: "string" },
-                whatsappProfileName: { type: "string", nullable: true }
+                whatsappProfileName: { type: "string", nullable: true },
+                source: { type: "string", example: "QUICK_SEND" }
               }
             },
             assignedEmployeeId: { type: "string", format: "uuid", nullable: true },
@@ -1405,8 +1643,8 @@ const swaggerSpec = swaggerJSDoc({
       "/api/customers/import-csv": {
         post: {
           tags: ["Customers"],
-          summary: "Import customers from CSV",
-          description: "Permission controlled. Supports Taradi debt collection columns: اسم العميل، رقم الهوية، رقم الحساب، الجهة، مبلغ المديونية، رقم الخدمة، تواريخ الخدمة، حالة الفاتورة، حالة التحصيل، تاريخ السداد، المبلغ المسدد، رقم مرجع السداد، ملاحظات السداد، سنة المديونية، رقم الهاتف الرئيسي، unlimited رقم الهاتف الفرعيN columns، واسم المحصل.",
+          summary: "Import customers from CSV (legacy)",
+          description: "Permission controlled CSV import. The preferred endpoint for new imports is /api/customers/import-excel because it accepts CSV and Excel files.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -1439,6 +1677,17 @@ const swaggerSpec = swaggerJSDoc({
                       updated: { type: "integer", example: 15 },
                       skipped: { type: "integer", example: 5 },
                       assigned: { type: "integer", example: 70 },
+                      unassigned: { type: "integer", example: 10 },
+                      warnings: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            row: { type: "integer", example: 8 },
+                            reason: { type: "string", example: "لم يتم العثور على المحصل، وتم استيراد العميل بدون إسناد" }
+                          }
+                        }
+                      },
                       errors: {
                         type: "array",
                         items: {
@@ -1459,8 +1708,98 @@ const swaggerSpec = swaggerJSDoc({
                       updated: 15,
                       skipped: 5,
                       assigned: 70,
+                      unassigned: 10,
+                      warnings: [
+                        { row: 8, reason: "لم يتم العثور على المحصل، وتم استيراد العميل بدون إسناد" }
+                      ],
                       errors: [
                         { row: 7, reason: "رقم الهاتف مطلوب" }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            400: { $ref: "#/components/responses/ValidationError" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/customers/import-excel": {
+        post: {
+          tags: ["Customers"],
+          summary: "Import customers from Excel or CSV",
+          description: "Permission controlled. Accepts .xlsx, .xls, and .csv files. Supported columns include: الجهة، اسم العميل، رقم الهوية، الرقم الرئيسي، رقم الحساب، مبلغ المديونية / مبلغ الميدونية، المحصل، اسم المستخدم، المتابعة، رقم الخدمة / MSISDN، تأريخ تفعيل الخدمة / CREATED_DATE، تاريخ إنتهاء الخدمة / STATUS_DATE، حالة الفاتورة / SERVICE_STATUS، وتأريخ سنة المديونية. Project names are normalized: موبايلي/mobily -> Mobily, اس تي سي/stc -> STC, زين/zain -> Zain. The original value is kept in projectNameRaw. Saudi phone numbers are normalized to 966 format. Unknown collectors are imported as unassigned warnings.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  required: ["file"],
+                  properties: {
+                    file: {
+                      type: "string",
+                      format: "binary",
+                      description: "Excel or CSV file up to 10MB. Field name must be file."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            200: {
+              description: "Customer import summary.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      totalRows: { type: "integer", example: 100 },
+                      created: { type: "integer", example: 80 },
+                      updated: { type: "integer", example: 15 },
+                      skipped: { type: "integer", example: 5 },
+                      assigned: { type: "integer", example: 70 },
+                      unassigned: { type: "integer", example: 25 },
+                      warnings: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            row: { type: "integer", example: 8 },
+                            reason: { type: "string", example: "لم يتم العثور على المحصل، وتم استيراد العميل بدون إسناد" }
+                          }
+                        }
+                      },
+                      errors: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            row: { type: "integer", example: 7 },
+                            reason: { type: "string", example: "رقم الهاتف الرئيسي مطلوب" }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  example: {
+                    success: true,
+                    data: {
+                      totalRows: 100,
+                      created: 80,
+                      updated: 15,
+                      skipped: 5,
+                      assigned: 70,
+                      unassigned: 25,
+                      warnings: [
+                        { row: 8, reason: "لم يتم العثور على المحصل، وتم استيراد العميل بدون إسناد" }
+                      ],
+                      errors: [
+                        { row: 7, reason: "رقم الهاتف الرئيسي مطلوب" }
                       ]
                     }
                   }
@@ -1681,6 +2020,57 @@ const swaggerSpec = swaggerJSDoc({
               }
             },
             401: { $ref: "#/components/responses/Unauthorized" }
+          }
+        }
+      },
+      "/api/chats/quick-send": {
+        post: {
+          tags: ["Chats", "WhatsApp"],
+          summary: "Quick send WhatsApp text by phone",
+          description: [
+            "Requires chats.send_message.",
+            "Normalizes the phone, searches all CustomerPhone records, reuses an existing customer/conversation when found, and auto-creates a lightweight QUICK_SEND customer when not found.",
+            "Admins may send to any number and optionally assign a staff member for new customers.",
+            "Supervisors may assign themselves or employees under them.",
+            "Employees are assigned to themselves and are blocked when the number already belongs to another employee.",
+            "The API queues a normal WhatsApp text message immediately. If Meta rejects it because the customer did not start a conversation in the last 24 hours, the worker marks the message FAILED with: فشل الإرسال: لا يمكن إرسال رسالة نصية مباشرة لأن العميل لم يبدأ محادثة خلال آخر 24 ساعة.",
+            "Sending is blocked only for PAID/DO_NOT_CONTACT customers before queueing."
+          ].join(" "),
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/QuickSendRequest" }
+              }
+            }
+          },
+          responses: {
+            201: {
+              description: "Customer/conversation resolved and outbound message queued.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      customer: { $ref: "#/components/schemas/Customer" },
+                      conversation: { $ref: "#/components/schemas/Conversation" },
+                      message: { $ref: "#/components/schemas/Message" },
+                      job: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          queue: { type: "string", example: "whatsapp-outbound" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            400: { $ref: "#/components/responses/ValidationError" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
           }
         }
       },
@@ -2153,11 +2543,215 @@ const swaggerSpec = swaggerJSDoc({
           }
         }
       },
-      "/api/whatsapp/templates/bulk": {
+      "/api/whatsapp/templates": {
+        get: {
+          tags: ["WhatsApp"],
+          summary: "List WhatsApp templates",
+          description: "Requires templates.view or send access. Returns APPROVED templates by default. Use status=ALL to list every synced template.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: { type: "string", example: "APPROVED" }
+            },
+            {
+              name: "category",
+              in: "query",
+              required: false,
+              schema: { type: "string", example: "UTILITY" }
+            },
+            {
+              name: "language",
+              in: "query",
+              required: false,
+              schema: { type: "string", example: "ar" }
+            },
+            {
+              name: "search",
+              in: "query",
+              required: false,
+              schema: { type: "string", example: "payment" }
+            }
+          ],
+          responses: {
+            200: {
+              description: "Synced WhatsApp templates.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/WhatsappTemplatesResponse" }
+                }
+              }
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/sync": {
+        post: {
+          tags: ["WhatsApp"],
+          summary: "Sync WhatsApp templates from Meta",
+          description: "Admin only. Calls /{WABA_ID}/message_templates with the system user token, follows pagination, and upserts templates without duplicates.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: "Sync summary.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/WhatsappTemplateSyncResponse" }
+                }
+              }
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/mapping-fields": {
+        get: {
+          tags: ["WhatsApp", "Campaigns"],
+          summary: "List allowed template mapping fields and transformers",
+          description: "Returns safe Customer fields available for WhatsApp template variable mapping. Full National ID is not exposed; only nationalId_last4 is available.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: "Mapping field metadata.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      fields: {
+                        type: "array",
+                        items: { $ref: "#/components/schemas/WhatsappTemplateMappingField" }
+                      },
+                      transformers: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            key: { type: "string", example: "currency" },
+                            labelAr: { type: "string", example: "عملة" }
+                          }
+                        }
+                      },
+                      defaultProfiles: { type: "object" }
+                    }
+                  }
+                }
+              }
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/{templateId}/mapping": {
+        get: {
+          tags: ["WhatsApp", "Campaigns"],
+          summary: "Get saved variable mapping for a template",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "templateId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+          responses: {
+            200: {
+              description: "Template mapping state.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/WhatsappTemplate" },
+                      variables: { type: "array", items: { $ref: "#/components/schemas/WhatsappTemplateVariable" } },
+                      mappings: { type: "array", items: { $ref: "#/components/schemas/WhatsappTemplateVariableMapping" } },
+                      missingVariables: { type: "array", items: { $ref: "#/components/schemas/WhatsappTemplateVariable" } },
+                      isComplete: { type: "boolean" },
+                      message: { type: "string", nullable: true }
+                    }
+                  }
+                }
+              }
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" }
+          }
+        },
+        put: {
+          tags: ["WhatsApp", "Campaigns"],
+          summary: "Save variable mapping for a template",
+          description: "Admin only. Saves one persistent mapping per detected variable key.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "templateId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    mappings: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["variableKey", "fieldKey"],
+                        properties: {
+                          variableKey: { type: "string", example: "body:::1" },
+                          fieldKey: { type: "string", example: "fullName" },
+                          transformer: { type: "string", nullable: true, example: "trim" },
+                          fallbackValue: { type: "string", nullable: true }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            200: { description: "Saved template mapping." },
+            400: { $ref: "#/components/responses/ValidationError" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" }
+          }
+        }
+      },
+      "/api/whatsapp/messages/template": {
+        post: {
+          tags: ["WhatsApp", "Chats"],
+          summary: "Send a WhatsApp template message",
+          description: "Requires template send or chat send permission. Finds the customer phone, builds the Meta template payload, sends it through WhatsApp Cloud API, stores the outbound conversation message, and emits realtime updates. If the template is not approved or disabled, the API returns the Arabic message: هذا القالب غير معتمد أو تم تعطيله.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/SendWhatsappTemplateRequest" }
+              }
+            }
+          },
+          responses: {
+            201: {
+              description: "Template message sent and saved.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/SendWhatsappTemplateResponse" }
+                }
+              }
+            },
+            400: { $ref: "#/components/responses/ValidationError" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/bulk/preview": {
         post: {
           tags: ["Campaigns", "WhatsApp"],
-          summary: "Create bulk WhatsApp template campaign",
-          description: "Requires campaigns.send. Queues an approved WhatsApp template for selected customers within the user's data scope. Customers with PAID or DO_NOT_CONTACT collection status are excluded. Campaigns use each customer's primary phone.",
+          summary: "Preview dynamic WhatsApp template campaign",
+          description: "Requires campaigns.send. Resolves saved template mappings for the selected customers and returns counts plus the first 3-5 customer previews without queueing messages.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -2168,8 +2762,66 @@ const swaggerSpec = swaggerJSDoc({
             }
           },
           responses: {
-            201: {
-              description: "Campaign send results.",
+            200: {
+              description: "Campaign preview.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CampaignPreviewResponse" }
+                }
+              }
+            },
+            400: { $ref: "#/components/responses/ValidationError" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/bulk/{campaignId}": {
+        get: {
+          tags: ["Campaigns", "WhatsApp"],
+          summary: "Get bulk campaign progress",
+          description: "Requires campaigns.view. Returns persisted preparation and send progress for an async bulk campaign.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              in: "path",
+              name: "campaignId",
+              required: true,
+              schema: { type: "string", format: "uuid" }
+            }
+          ],
+          responses: {
+            200: {
+              description: "Campaign progress.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CampaignResponse" }
+                }
+              }
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" }
+          }
+        }
+      },
+      "/api/whatsapp/templates/bulk": {
+        post: {
+          tags: ["Campaigns", "WhatsApp"],
+          summary: "Create bulk WhatsApp template campaign",
+          description: "Requires campaigns.send. Accepts an async campaign creation job for selected customers or all customers matching filters. The campaign preparation worker resolves saved template mappings per customer and stores recipient snapshots in queued messages.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CreateCampaignRequest" }
+              }
+            }
+          },
+          responses: {
+            202: {
+              description: "Campaign accepted for asynchronous preparation.",
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/CampaignResponse" }

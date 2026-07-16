@@ -18,6 +18,15 @@ function normalizeErrors(error) {
   return [error.details];
 }
 
+function normalizeStatusCode(error) {
+  const rawStatus = error.statusCode || error.status;
+  const statusCode = Number(rawStatus);
+
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 600
+    ? statusCode
+    : 500;
+}
+
 function errorHandler(error, req, res, next) {
   if (res.headersSent) {
     return next(error);
@@ -39,14 +48,17 @@ function errorHandler(error, req, res, next) {
     });
   }
 
-  const statusCode = error.statusCode || 500;
+  const statusCode = normalizeStatusCode(error);
   const payload = {
     success: false,
-    message: error.message || "Internal server error",
-    errors: normalizeErrors(error)
+    message: error.message || "Internal server error"
   };
 
-  if (process.env.NODE_ENV !== "production" && statusCode === 500) {
+  if (!error.omitErrors) {
+    payload.errors = normalizeErrors(error);
+  }
+
+  if (!error.omitErrors && process.env.NODE_ENV !== "production" && statusCode === 500) {
     payload.errors.push({ stack: error.stack });
   }
 

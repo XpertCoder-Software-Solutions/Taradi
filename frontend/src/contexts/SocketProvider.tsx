@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { AUDIO_BLOCKED_EVENT, disableAudio, enableAudio, playIncomingMessage } from "../lib/audioManager";
 import { debugLog } from "../lib/debug";
+import { friendlyMessageFailureReason } from "../lib/i18n";
 import {
   getNotificationPreferences,
   NOTIFICATION_PREFERENCES_EVENT,
@@ -39,6 +40,10 @@ interface PresencePayload {
   userId?: string;
   isOnline?: boolean;
   lastSeenAt?: string | null;
+}
+
+interface MessageStatusPayload {
+  message?: Message;
 }
 
 function appendIncomingMessage(current: ChatMessagesResponse | undefined, message: Message, conversation?: Conversation | null) {
@@ -83,18 +88,30 @@ function updateConversationLists(
     }
 
     const isSameLastMessage = currentConversation.lastMessage?.id === message.id;
+    const shouldIncrementUnread = message.direction === "INBOUND" && !isSameLastMessage;
 
     return {
       ...currentConversation,
       lastMessage: message,
       lastMessageAt: message.createdAt,
-      unreadCount: isSameLastMessage ? currentConversation.unreadCount : currentConversation.unreadCount + 1,
-      status: "OPEN" as const,
+      unreadCount: shouldIncrementUnread ? currentConversation.unreadCount + 1 : currentConversation.unreadCount,
+      status: message.direction === "INBOUND" ? "OPEN" as const : currentConversation.status,
       updatedAt: message.updatedAt || message.createdAt
     };
   });
 
   if (!updated) {
+    if (conversation) {
+      return {
+        ...current,
+        items: [conversation, ...current.items].sort((a, b) => {
+          const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+          const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+          return bTime - aTime;
+        })
+      };
+    }
+
     return current;
   }
 
@@ -197,6 +214,11 @@ function updateEmployeePresence(current: Paginated<User> | undefined, payload: P
   });
 
   return updated ? { ...current, items } : current;
+}
+
+function isQuickSendStatusMessage(message?: Message) {
+  return message?.rawPayload?.source === "QUICK_SEND" ||
+    message?.rawPayload?.queued?.source === "QUICK_SEND";
 }
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -317,11 +339,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      queryClient.invalidateQueries({ queryKey: ["chats"] });
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
-      if (customerId) {
-        queryClient.invalidateQueries({ queryKey: ["messages", customerId] });
-      }
     };
 
     const handleIncomingConversationMessage = (payload: IncomingMessagePayload) => {
@@ -382,9 +399,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           (current) => updateConversationLists(current, customerId, payload.message, payload.conversation)
         );
       }
-
-      queryClient.invalidateQueries({ queryKey: ["chats"] });
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     };
 
     const handleUnreadCount = (payload: UnreadCountPayload) => {
@@ -392,7 +406,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         ["notifications", "unread"],
         (current) => current ? { ...current, unreadTotal: payload.unreadTotal || 0 } : current
       );
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     };
 
     const handlePresenceOnline = (payload: PresencePayload) => {
@@ -400,7 +413,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         { queryKey: ["employees"] },
         (current) => updateEmployeePresence(current, payload, true)
       );
-      queryClient.invalidateQueries({ queryKey: ["employees"] });
     };
 
     const handlePresenceOffline = (payload: PresencePayload) => {
@@ -408,22 +420,51 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         { queryKey: ["employees"] },
         (current) => updateEmployeePresence(current, payload, false)
       );
-      queryClient.invalidateQueries({ queryKey: ["employees"] });
     };
 
-    const handleMessageSent = () => {
-      queryClient.invalidateQueries({ queryKey: ["chats"] });
+    const handleMessageSent = (payload: IncomingMessagePayload) => {
+      applyIncomingMessage(payload);
     };
 
-    const handleMessageStatus = () => {
+    const handleMessageStatus = (payload: MessageStatusPayload) => {
+      const message = payload?.message;
+
       queryClient.invalidateQueries({ queryKey: ["chats"] });
+      if (message?.customerId) {
+        queryClient.invalidateQueries({ queryKey: ["messages", message.customerId] });
+      }
+
+      if (!isQuickSendStatusMessage(message)) {
+        return;
+      }
+
+      if (message?.status === "SENT") {
+        pushToast({ title: "تم إرسال الرسالة عبر واتساب", tone: "success" });
+      }
+
+      if (message?.status === "FAILED") {
+        pushToast({
+          title: "فشل إرسال الرسالة عبر واتساب",
+          description: friendlyMessageFailureReason(message.error),
+          tone: "error"
+        });
+      }
     };
 
-    const handleInboxUpdated = (payload: { customerId?: string }) => {
-      queryClient.invalidateQueries({ queryKey: ["chats"] });
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
-      if (payload?.customerId) {
-        queryClient.invalidateQueries({ queryKey: ["messages", payload.customerId] });
+    const handleInboxUpdated = (payload: IncomingMessagePayload & { reason?: string }) => {
+      const customerId = payload?.customerId || payload?.customer?.id || payload?.conversation?.customerId || payload?.message?.customerId;
+
+      if (customerId && (payload.conversation || payload.message)) {
+        queryClient.setQueriesData<Paginated<Conversation>>(
+          { queryKey: ["chats"] },
+          (current) => updateConversationLists(current, customerId, payload.message, payload.conversation)
+        );
+        return;
+      }
+
+      if (!customerId) {
+        queryClient.invalidateQueries({ queryKey: ["chats"] });
+        queryClient.invalidateQueries({ queryKey: ["notifications"] });
       }
     };
 
@@ -452,6 +493,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on("conversation:new_message", handleIncomingConversationMessage);
     socket.on("message:received", applyIncomingMessage);
     socket.on("conversation:updated", handleConversationUpdated);
+    socket.on("unread-count:updated", handleUnreadCount);
     socket.on("notification:unread_count", handleUnreadCount);
     socket.on("presence:user_online", handlePresenceOnline);
     socket.on("presence:user_offline", handlePresenceOffline);
@@ -471,6 +513,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off("conversation:new_message", handleIncomingConversationMessage);
       socket.off("message:received", applyIncomingMessage);
       socket.off("conversation:updated", handleConversationUpdated);
+      socket.off("unread-count:updated", handleUnreadCount);
       socket.off("notification:unread_count", handleUnreadCount);
       socket.off("presence:user_online", handlePresenceOnline);
       socket.off("presence:user_offline", handlePresenceOffline);

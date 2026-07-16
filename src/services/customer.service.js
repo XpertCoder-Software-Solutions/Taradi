@@ -94,7 +94,8 @@ function customerInclude() {
         { position: "asc" },
         { createdAt: "asc" }
       ]
-    }
+    },
+    debts: { orderBy: [{ isActive: "desc" }, { debtYear: "desc" }, { createdAt: "desc" }] }
   };
 }
 
@@ -141,6 +142,31 @@ function normalizeRequiredText(value, message) {
   }
 
   return text;
+}
+
+function normalizeProjectNameKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[إأآا]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function normalizeProjectName(name) {
+  const original = String(name || "").trim();
+  const key = normalizeProjectNameKey(original);
+  const map = {
+    mobily: "Mobily",
+    موبايلي: "Mobily",
+    stc: "STC",
+    استيسي: "STC",
+    zain: "Zain",
+    زين: "Zain"
+  };
+
+  return map[key] || original;
 }
 
 function normalizeInvoiceStatus(value) {
@@ -211,8 +237,8 @@ function parseDebtYear(value) {
   const year = Number(value);
   const currentYear = new Date().getFullYear();
 
-  if (!Number.isInteger(year) || year < 2018 || year > currentYear) {
-    throw new ApiError(400, "سنة المديونية غير صحيحة");
+  if (!Number.isInteger(year) || year < 2000 || year > currentYear) {
+    throw new ApiError(400, "سنة المديونية يجب أن تكون بين 2000 والسنة الحالية.");
   }
 
   return year;
@@ -280,6 +306,14 @@ function formatCustomer(customer) {
       ? assignedUser.name
       : assignedUser.supervisor ? assignedUser.supervisor.name : null
     : null;
+  const debts = (customer.debts || []).map((debt) => ({
+    ...debt,
+    debtAmount: debt.debtAmount == null ? "0" : debt.debtAmount.toString(),
+    paidAmount: debt.paidAmount == null ? null : debt.paidAmount.toString()
+  }));
+  const activeDebts = debts.filter((debt) => debt.isActive);
+  const activeDebtTotal = activeDebts.reduce((sum, debt) => sum + Number(debt.debtAmount || 0), 0);
+  const debtYears = activeDebts.map((debt) => debt.debtYear).filter(Number.isInteger);
 
   return {
     ...customer,
@@ -308,6 +342,12 @@ function formatCustomer(customer) {
     collectorName: assignedUser ? assignedUser.name : null,
     supervisorName,
     tags: customer.tags || []
+    ,debts
+    ,activeDebtsCount: activeDebts.length
+    ,totalActiveDebtAmount: activeDebtTotal.toFixed(2)
+    ,debtProjects: [...new Set(activeDebts.map((debt) => debt.projectName).filter(Boolean))]
+    ,oldestDebtYear: debtYears.length ? Math.min(...debtYears) : null
+    ,newestDebtYear: debtYears.length ? Math.max(...debtYears) : null
   };
 }
 
@@ -380,6 +420,11 @@ function buildCustomerSearchWhere(search) {
     { accountNumber: { contains: search, mode: "insensitive" } },
     { projectName: { contains: search, mode: "insensitive" } },
     { serviceNumber: { contains: search, mode: "insensitive" } },
+    { debts: { some: { OR: [
+      { accountNumber: { contains: search, mode: "insensitive" } },
+      { serviceNumber: { contains: search, mode: "insensitive" } },
+      { projectName: { contains: search, mode: "insensitive" } }
+    ] } } },
     ...phoneFilters,
     { nationalId: { contains: search, mode: "insensitive" } },
     { notes: { contains: search, mode: "insensitive" } }
@@ -563,12 +608,15 @@ async function findCustomerByPhone(phoneInput, options = {}) {
   };
 }
 
-async function listCustomers(user, query) {
-  const { page, limit, skip } = getPagination(query);
+function buildCustomerWhere(user, query = {}) {
   const where = customerAccessWhere(user);
 
-  if (query.assignment === "unassigned" && user.role === "ADMIN") {
+  if ((query.assignment === "unassigned" || query.assignmentStatus === "unassigned") && user.role === "ADMIN") {
     where.assignedToId = null;
+  }
+
+  if (query.assignmentStatus === "assigned" && where.assignedToId === undefined) {
+    where.assignedToId = { not: null };
   }
 
   const assignedEmployeeId = query.assignedEmployeeId || query.assignedToId;
@@ -590,19 +638,30 @@ async function listCustomers(user, query) {
   }
 
   if (query.projectName) {
-    where.projectName = String(query.projectName).trim();
+    where.debts = { some: { ...(where.debts && where.debts.some), projectName: String(query.projectName).trim(), isActive: true } };
   }
 
   if (query.invoiceStatus) {
-    where.invoiceStatus = normalizeInvoiceStatus(query.invoiceStatus);
+    where.debts = { some: { ...(where.debts && where.debts.some), invoiceStatus: normalizeInvoiceStatus(query.invoiceStatus), isActive: true } };
   }
 
   if (query.debtYear) {
-    where.debtYear = parseDebtYearFilter(query.debtYear);
+    where.debts = { some: { ...(where.debts && where.debts.some), debtYear: parseDebtYearFilter(query.debtYear), isActive: true } };
   }
 
   if (query.collectionStatus) {
-    where.collectionStatus = normalizeCollectionStatus(query.collectionStatus);
+    where.debts = { some: { ...(where.debts && where.debts.some), collectionStatus: normalizeCollectionStatus(query.collectionStatus), isActive: true } };
+  }
+
+  if (query.minDebtAmount || query.maxDebtAmount) {
+    where.debts = { some: { ...(where.debts && where.debts.some), isActive: true, debtAmount: {
+      ...(query.minDebtAmount ? { gte: parseDebtAmount(query.minDebtAmount) } : {}),
+      ...(query.maxDebtAmount ? { lte: parseDebtAmount(query.maxDebtAmount) } : {})
+    } } };
+  }
+
+  if (normalizeBoolean(query.hasMultipleDebts)) {
+    where.debts = { some: { ...(where.debts && where.debts.some), isActive: true } };
   }
 
   if (normalizeBoolean(query.paidOnly)) {
@@ -624,6 +683,24 @@ async function listCustomers(user, query) {
         ]
       }
     };
+  }
+
+  return where;
+}
+
+async function listCustomers(user, query) {
+  const { page, limit, skip } = getPagination(query);
+  const where = buildCustomerWhere(user, query);
+
+  if (normalizeBoolean(query.hasMultipleDebts)) {
+    const activeDebtOwners = await prisma.customerDebt.findMany({
+      where: { isActive: true, customer: { is: customerAccessWhere(user) } },
+      select: { customerId: true }
+    });
+    const counts = new Map();
+    for (const row of activeDebtOwners) counts.set(row.customerId, (counts.get(row.customerId) || 0) + 1);
+    const multipleIds = [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
+    where.id = { ...(where.id || {}), in: multipleIds };
   }
 
   const [items, total] = await Promise.all([
@@ -698,6 +775,10 @@ async function resolveAssignment(user, data, defaultToCurrentUser = true) {
 
 function buildCreateData(user, data, assignedToId, primaryPhone) {
   const fullName = normalizeRequiredText(data.fullName || data.name, "اسم العميل مطلوب");
+  const projectNameInput = data.projectNameRaw === undefined || data.projectNameRaw === null || data.projectNameRaw === ""
+    ? data.projectName
+    : data.projectNameRaw;
+  const projectNameRaw = normalizeRequiredText(projectNameInput, "الجهة مطلوبة");
   const collectionStatus = normalizeCollectionStatus(data.collectionStatus || "ACTIVE_DEBT");
   const paidAt = data.paidAt !== undefined
     ? parseOptionalDate(data.paidAt, "تاريخ السداد غير صحيح")
@@ -710,7 +791,8 @@ function buildCreateData(user, data, assignedToId, primaryPhone) {
     fullName,
     nationalId: normalizeRequiredText(data.nationalId, "رقم الهوية مطلوب"),
     accountNumber: normalizeRequiredText(data.accountNumber, "رقم الحساب مطلوب"),
-    projectName: normalizeRequiredText(data.projectName, "الجهة مطلوبة"),
+    projectName: normalizeProjectName(projectNameRaw),
+    projectNameRaw,
     debtAmount: parseDebtAmount(data.debtAmount),
     serviceNumber: normalizeRequiredText(data.serviceNumber, "رقم الخدمة مطلوب"),
     serviceActivationDate: parseOptionalDate(data.serviceActivationDate, "تاريخ تفعيل الخدمة غير صحيح"),
@@ -751,7 +833,14 @@ function buildUpdateData(data, primaryPhone, context = {}) {
   }
 
   if (data.projectName !== undefined) {
-    updateData.projectName = normalizeRequiredText(data.projectName, "الجهة مطلوبة");
+    const projectNameInput = data.projectNameRaw === undefined || data.projectNameRaw === null || data.projectNameRaw === ""
+      ? data.projectName
+      : data.projectNameRaw;
+    const projectNameRaw = normalizeRequiredText(projectNameInput, "الجهة مطلوبة");
+    updateData.projectName = normalizeProjectName(projectNameRaw);
+    updateData.projectNameRaw = projectNameRaw;
+  } else if (data.projectNameRaw !== undefined) {
+    updateData.projectNameRaw = normalizeText(data.projectNameRaw);
   }
 
   if (data.debtAmount !== undefined) {
@@ -882,7 +971,7 @@ async function applyCollectionStatusSideEffects(customerId, user, collectionStat
     }
 
     const conversation = await tx.conversation.upsert({
-      where: { customerId },
+      where: { activeKey: customerId },
       update: {
         status: "CLOSED",
         unreadCount: 0,
@@ -890,6 +979,7 @@ async function applyCollectionStatusSideEffects(customerId, user, collectionStat
       },
       create: {
         customerId,
+        activeKey: customerId,
         assignedEmployeeId: customer.assignedToId || null,
         status: "CLOSED",
         unreadCount: 0,
@@ -936,11 +1026,31 @@ async function createCustomer(user, data) {
 
   try {
     const customer = await prisma.$transaction(async (tx) => {
+      const createData = buildCreateData(user, data, assignedToId, primaryPhone);
       const created = await tx.customer.create({
-        data: buildCreateData(user, data, assignedToId, primaryPhone)
+        data: createData
       });
 
       await replaceCustomerPhones(tx, created.id, primaryPhone, secondaryPhones);
+      await tx.customerDebt.create({
+        data: {
+          customerId: created.id,
+          projectName: createData.projectName,
+          projectNameRaw: createData.projectNameRaw,
+          accountNumber: createData.accountNumber,
+          serviceNumber: createData.serviceNumber,
+          debtYear: createData.debtYear,
+          debtAmount: createData.debtAmount,
+          invoiceStatus: createData.invoiceStatus,
+          collectionStatus: createData.collectionStatus,
+          serviceActivationDate: createData.serviceActivationDate,
+          serviceTerminationDate: createData.serviceTerminationDate,
+          paidAmount: createData.paidAmount,
+          paidAt: createData.paidAt,
+          paymentReference: createData.paymentReference,
+          paymentNotes: createData.paymentNotes
+        }
+      });
 
       return created;
     });
@@ -975,8 +1085,12 @@ async function updateCustomer(customerId, user, data) {
   const requestedAssignedEmployeeId = data.assignedEmployeeId !== undefined
     ? data.assignedEmployeeId
     : data.assignedToId;
+  const assignmentRequested = requestedAssignedEmployeeId !== undefined;
+  const assignmentReason = normalizeText(data.assignmentReason || data.reassignmentReason);
+  let nextAssignedToId;
+  let nextAssignee = null;
 
-  if (requestedAssignedEmployeeId !== undefined) {
+  if (assignmentRequested) {
     if (!hasPermission(user, "customers.assign")) {
       throw new ApiError(403, "لا تملك صلاحية إسناد العملاء");
     }
@@ -986,30 +1100,58 @@ async function updateCustomer(customerId, user, data) {
       if (assignee.role !== "EMPLOYEE") {
         throw new ApiError(400, "اسم المحصل يجب أن يكون موظفًا نشطًا");
       }
+      nextAssignee = assignee;
     } else if (user.role !== "ADMIN") {
       throw new ApiError(403, "لا يمكن للمشرف إلغاء إسناد العميل");
     }
 
-    updateData.assignedToId = requestedAssignedEmployeeId;
+    nextAssignedToId = requestedAssignedEmployeeId || null;
   }
 
   try {
+    let reassignment = null;
     const customer = await prisma.$transaction(async (tx) => {
-      const updated = await tx.customer.update({
-        where: { id: customerId },
-        data: updateData
-      });
+      if (assignmentRequested) {
+        await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${customerId} FOR UPDATE`;
+      }
+
+      const updated = Object.keys(updateData).length > 0
+        ? await tx.customer.update({
+            where: { id: customerId },
+            data: updateData,
+            include: {
+              assignedTo: { select: assignedUserSelect }
+            }
+          })
+        : await tx.customer.findUnique({
+            where: { id: customerId },
+            include: {
+              assignedTo: { select: assignedUserSelect }
+            }
+          });
 
       if (phoneList) {
         await replaceCustomerPhones(tx, customerId, phoneList.primaryPhone, phoneList.secondaryPhones);
       }
 
-      return updated;
-    });
+      if (assignmentRequested) {
+        reassignment = await conversationService.reassignCustomerConversationInTransaction(tx, {
+          customerId,
+          newAssigneeId: nextAssignedToId,
+          actor: user,
+          reason: assignmentReason,
+          preloadedCustomer: updated,
+          newAssignee: nextAssignee
+        });
+      }
 
-    if (Object.prototype.hasOwnProperty.call(updateData, "assignedToId")) {
-      await conversationService.syncConversationAssignment(customer.id, customer.assignedToId);
-    }
+      return assignmentRequested
+        ? tx.customer.findUnique({
+            where: { id: customerId },
+            include: customerInclude()
+          })
+        : updated;
+    });
 
     if (
       Object.prototype.hasOwnProperty.call(updateData, "collectionStatus") &&
@@ -1021,7 +1163,7 @@ async function updateCustomer(customerId, user, data) {
 
     await safeRecordEmployeeActivity(
       user,
-      Object.prototype.hasOwnProperty.call(updateData, "assignedToId") ? "ASSIGNED_CUSTOMER" : "UPDATED_CUSTOMER",
+      assignmentRequested ? "ASSIGNED_CUSTOMER" : "UPDATED_CUSTOMER",
       new Date()
     );
 
@@ -1030,17 +1172,20 @@ async function updateCustomer(customerId, user, data) {
       role: "ADMIN"
     });
 
-    return formattedCustomer;
+    return assignmentRequested && reassignment
+      ? { customer: formattedCustomer, reassignment }
+      : formattedCustomer;
   } catch (error) {
     mapUniqueError(error);
   }
 }
 
-async function assignCustomer(customerId, user, employeeId) {
+async function assignCustomer(customerId, user, employeeId, options = {}) {
   await getCustomerForUser(customerId, user);
+  let assignee = null;
 
   if (employeeId) {
-    const assignee = await assertAssignableStaff(employeeId, user);
+    assignee = await assertAssignableStaff(employeeId, user);
     if (assignee.role !== "EMPLOYEE") {
       throw new ApiError(400, "اسم المحصل يجب أن يكون موظفًا نشطًا");
     }
@@ -1048,17 +1193,22 @@ async function assignCustomer(customerId, user, employeeId) {
     throw new ApiError(403, "لا يمكن للمشرف إلغاء إسناد العميل");
   }
 
-  const customer = await prisma.customer.update({
+  const reassignment = await conversationService.reassignCustomerConversation(customerId, employeeId || null, user, {
+    reason: options.reason || null,
+    newAssignee: assignee
+  });
+
+  const customer = await prisma.customer.findUnique({
     where: { id: customerId },
-    data: { assignedToId: employeeId },
     include: customerInclude()
   });
 
-  await conversationService.syncConversationAssignment(customer.id, customer.assignedToId);
-
   await safeRecordEmployeeActivity(user, "ASSIGNED_CUSTOMER", new Date());
 
-  return formatCustomer(customer);
+  return {
+    customer: formatCustomer(customer),
+    reassignment
+  };
 }
 
 async function updateCustomerCollectionStatus(customerId, user, data) {
@@ -1084,6 +1234,9 @@ module.exports = {
   assignedUserSelect,
   customerAccessWhere,
   customerInclude,
+  buildCustomerWhere,
+  buildCustomerOrderBy,
+  buildCustomerSearchWhere,
   findCustomerByPhone,
   formatCustomer,
   invoiceStatuses,
@@ -1092,6 +1245,7 @@ module.exports = {
   collectionStatusLabels,
   blockedCollectionStatuses,
   contactBlockMessage,
+  normalizeProjectName,
   normalizeCollectionStatus,
   isCustomerContactBlocked,
   getCollectionStatusLabel,

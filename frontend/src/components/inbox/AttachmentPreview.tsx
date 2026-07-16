@@ -1,5 +1,15 @@
-import { FileText, X } from "lucide-react";
+import { FileText, ImageIcon, Music, Video, X } from "lucide-react";
 import { formatArabicFileSize, mediaTypeLabel } from "../../lib/i18n";
+
+type AttachmentMediaType = "image" | "audio" | "voice" | "video" | "document";
+
+function PreviewIcon({ mediaType }: { mediaType: AttachmentMediaType }) {
+  if (mediaType === "image") return <ImageIcon className="h-5 w-5" />;
+  if (mediaType === "video") return <Video className="h-5 w-5" />;
+  if (mediaType === "audio" || mediaType === "voice") return <Music className="h-5 w-5" />;
+
+  return <FileText className="h-5 w-5" />;
+}
 
 export function AttachmentPreview({
   file,
@@ -9,7 +19,7 @@ export function AttachmentPreview({
   onClear
 }: {
   file: File | null;
-  mediaType: "image" | "audio" | "voice" | "document";
+  mediaType: AttachmentMediaType;
   caption: string;
   onCaptionChange: (value: string) => void;
   onClear: () => void;
@@ -22,7 +32,7 @@ export function AttachmentPreview({
     <div className="border-t border-neutral-200 bg-white px-4 py-3">
       <div className="flex items-center gap-3 rounded-lg bg-neutral-50 p-3">
         <div className="grid h-10 w-10 place-items-center rounded-md bg-[#d9fdd3] text-[#116d4d]">
-          <FileText className="h-5 w-5" />
+          <PreviewIcon mediaType={mediaType} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-ink-900">{file.name}</p>
@@ -41,4 +51,3 @@ export function AttachmentPreview({
     </div>
   );
 }
-

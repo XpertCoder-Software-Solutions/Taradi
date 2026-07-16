@@ -1,11 +1,11 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, Copy, Download, Edit2, FileSpreadsheet, MessageCircle, Plus, Search, Trash2, Upload, UserCog, UserPlus, UsersRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
-import { createCustomer, importCustomersCsv, listCustomers, updateCustomer } from "../api/customers.api";
+import { createCustomer, importCustomersExcel, listCustomers, updateCustomer } from "../api/customers.api";
 import { listEmployees } from "../api/employees.api";
 import { Avatar } from "../components/ui/Avatar";
 import { Badge } from "../components/ui/Badge";
@@ -24,7 +24,7 @@ import { showTaradiAlert, showTaradiConfirm } from "../lib/sweetAlert";
 import type { CollectionStatus, Customer, CustomerImportSummary, InvoiceStatus } from "../types/api";
 
 const currentYear = new Date().getFullYear();
-const debtYearOptions = Array.from({ length: currentYear - 2018 + 1 }, (_, index) => 2018 + index);
+const debtYearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, index) => currentYear - index);
 const projectNameOptions = ["STC", "Mobily"] as const;
 const pageSizeOptions = [10, 25, 50, 100];
 
@@ -78,7 +78,7 @@ const customerSchema = z.object({
   }, "المبلغ المسدد غير صحيح"),
   paymentReference: z.string().optional(),
   paymentNotes: z.string().optional(),
-  debtYear: z.coerce.number().int().min(2018).max(currentYear),
+  debtYear: z.coerce.number().int().min(2000, "سنة المديونية يجب أن تكون بين 2000 والسنة الحالية.").max(currentYear, "سنة المديونية يجب أن تكون بين 2000 والسنة الحالية."),
   primaryPhone: z.string().trim().min(1, "رقم الهاتف الرئيسي مطلوب"),
   secondaryPhones: z.array(z.object({
     phoneNumber: z.string().trim()
@@ -308,7 +308,8 @@ export function CustomersPage() {
       ...(supervisorFilter ? { supervisorId: supervisorFilter } : {}),
       ...(collectionStatusFilter ? { collectionStatus: collectionStatusFilter } : {}),
       ...(debtYearFilter ? { debtYear: debtYearFilter } : {})
-    })
+    }),
+    placeholderData: keepPreviousData
   });
 
   const employeesQuery = useQuery({
@@ -374,6 +375,9 @@ export function CustomersPage() {
       form.reset(defaultValues);
       pushToast({
         title: collectorChanged ? "تم تغيير المحصل" : wasEditing ? "تم تحديث بيانات العميل" : "تم إضافة العميل بنجاح",
+        description: collectorChanged && "archivedConversationId" in result && result.archivedConversationId
+          ? "تم نقل العميل إلى الموظف الجديد وأرشفة المحادثة السابقة."
+          : undefined,
         tone: "success"
       });
       void showTaradiAlert({
@@ -387,19 +391,19 @@ export function CustomersPage() {
   const importMutation = useMutation({
     mutationFn: () => {
       if (!importFile) {
-        throw new Error("اختر ملف CSV أولًا");
+        throw new Error("اختر ملف Excel أو CSV أولًا");
       }
 
-      return importCustomersCsv(importFile);
+      return importCustomersExcel(importFile);
     },
     onSuccess: (result) => {
       setImportResult(result);
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       queryClient.invalidateQueries({ queryKey: ["chats"] });
       pushToast({
-        title: "تم استيراد العملاء",
-        description: `${result.created} إنشاء، ${result.updated} تحديث، ${result.skipped} تخطي`,
-        tone: result.errors.length ? "info" : "success"
+        title: "تم استيراد العملاء بنجاح",
+        description: `${result.created} إنشاء، ${result.updated} تحديث، ${result.assigned} مسند، ${result.unassigned || 0} غير مسند`,
+        tone: result.errors.length || result.warnings?.length ? "info" : "success"
       });
     },
     onError: (error) => pushToast({ title: "تعذر استيراد العملاء", description: translateApiError(error), tone: "error" })
@@ -444,8 +448,8 @@ export function CustomersPage() {
 
   function downloadSampleCsv() {
     const csv = [
-      "اسم العميل,رقم الهوية,رقم الحساب,الجهة,مبلغ المديونية,رقم الخدمة,تاريخ تفعيل الخدمة,تاريخ إنهاء الخدمة,حالة الفاتورة,حالة التحصيل,تاريخ السداد,المبلغ المسدد,رقم مرجع السداد,ملاحظات السداد,سنة المديونية,رقم الهاتف الرئيسي,رقم الهاتف الفرعي1,رقم الهاتف الفرعي2,اسم المحصل",
-      "أحمد علي,1234567890,ACC-1001,STC,2500.75,SVC-9988,2020-01-15,2021-03-20,غير مدفوعة,مديونية قائمة,,,,2021,966500000001,966500000002,966500000003,محمد المحصل"
+      "الجهة,اسم العميل,رقم الهوية,الرقم الرئيسي,رقم الحساب,مبلغ المديونية,المحصل,اسم المستخدم,المتابعة,رقم الخدمة,تأريخ تفعيل الخدمة,تاريخ إنتهاء الخدمة,حالة الفاتورة,تأريخ سنة المديونية",
+      "STC,أحمد علي,1234567890,0500000001,ACC-1001,2500.75,محمد المحصل,user-01,متابعة خلال أسبوع,SVC-9988,15/01/2020,20/03/2021,Closed - N,2021"
     ].join("\n");
     const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -491,6 +495,15 @@ export function CustomersPage() {
     collectionStatusFilter ||
     debtYearFilter
   );
+  const activeFiltersCount = [
+    search,
+    projectNameFilter,
+    invoiceStatusFilter,
+    collectorFilter,
+    supervisorFilter,
+    collectionStatusFilter,
+    debtYearFilter
+  ].filter(Boolean).length;
   const pageTitle = isAdmin ? "العملاء" : user?.role === "SUPERVISOR" ? "عملاء الفريق" : "عملائي";
 
   async function copyText(value: string, label: string) {
@@ -560,6 +573,12 @@ export function CustomersPage() {
           </div>
         `).join("")
       : `<div style="border:1px dashed #e5e7eb;border-radius:14px;padding:12px;color:#64748b">لا توجد أرقام مسجلة</div>`;
+    const debtsHtml = (customer.debts || []).map((debt) => `
+      <div style="border:1px solid #d1fae5;background:${debt.isActive ? "#f0fdf4" : "#f8fafc"};border-radius:14px;padding:12px;margin-top:8px">
+        <div><b>${escapeHtml(debt.projectName || "جهة غير محددة")}</b> — حساب <span dir="ltr">${escapeHtml(debt.accountNumber)}</span></div>
+        <div>الخدمة: <span dir="ltr">${escapeHtml(debt.serviceNumber || "غير محدد")}</span> | السنة: ${debt.debtYear}</div>
+        <div>المبلغ: <b>${escapeHtml(formatCurrency(debt.debtAmount))}</b> | ${debt.isActive ? "نشطة" : "مؤرشفة"}</div>
+      </div>`).join("") || `<div style="border:1px dashed #e5e7eb;border-radius:14px;padding:12px;color:#64748b">لا توجد مديونيات مسجلة</div>`;
 
     void showTaradiAlert({
       title: "تفاصيل العميل",
@@ -567,13 +586,11 @@ export function CustomersPage() {
         <div dir="rtl" style="text-align:right;line-height:1.9">
           <p><b>اسم العميل:</b> ${escapeHtml(customerDisplayName(customer))}</p>
           <p><b>رقم الهوية:</b> ${escapeHtml(customer.nationalId || "غير محدد")}</p>
-          <p><b>رقم الحساب:</b> ${escapeHtml(customer.accountNumber || "غير محدد")}</p>
           <div style="margin:12px 0">
             <b>أرقام التواصل:</b>
             ${phonesHtml}
           </div>
-          <p><b>الجهة:</b> ${escapeHtml(customer.projectName || "غير محدد")}</p>
-          <p><b>المديونية:</b> ${escapeHtml(formatCurrency(customer.debtAmount))}</p>
+          <div style="margin:12px 0"><b>مديونيات العميل:</b>${debtsHtml}</div>
           <p><b>المحصل:</b> ${escapeHtml(customerCollectorName(customer))}</p>
           <p><b>المشرف:</b> ${escapeHtml(customerSupervisorName(customer))}</p>
         </div>
@@ -587,6 +604,17 @@ export function CustomersPage() {
     setter(value);
   }
 
+  function clearFilters() {
+    setPage(1);
+    setSearch("");
+    setProjectNameFilter("");
+    setInvoiceStatusFilter("");
+    setCollectorFilter("");
+    setSupervisorFilter("");
+    setCollectionStatusFilter("");
+    setDebtYearFilter("");
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -596,7 +624,7 @@ export function CustomersPage() {
           <>
             {canImport ? (
               <Button variant="secondary" icon={<FileSpreadsheet className="h-4 w-4" />} onClick={openImportModal}>
-                استيراد CSV
+                استيراد العملاء
               </Button>
             ) : null}
             {canCreate ? <Button icon={<UserPlus className="h-4 w-4" />} onClick={openCreateModal}>إضافة عميل</Button> : null}
@@ -607,10 +635,10 @@ export function CustomersPage() {
       <Card>
         <CardHeader
           title={isAdmin ? "كل العملاء" : "العملاء المسندون"}
-          description={`${totalCustomers} عميل في العرض الحالي`}
+          description={`${totalCustomers} عميل في العرض الحالي${customersQuery.isFetching ? " · جاري التحديث..." : ""}`}
           action={(
-            <div className="grid w-full gap-2 xl:grid-cols-[minmax(280px,1.3fr)_repeat(4,minmax(140px,0.7fr))] 2xl:grid-cols-[minmax(320px,1.5fr)_repeat(7,minmax(130px,0.65fr))]">
-              <div className="relative w-full">
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+              <div className="relative min-w-0 sm:col-span-2">
                 <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500" />
                 <Input
                   className="pr-9"
@@ -619,47 +647,64 @@ export function CustomersPage() {
                   placeholder="ابحث باسم العميل أو رقم الهوية أو الحساب أو الهاتف"
                 />
               </div>
-              <Select value={projectNameFilter} onChange={(event) => setFilter(setProjectNameFilter, event.target.value)}>
+              <Select className="w-full" value={projectNameFilter} onChange={(event) => setFilter(setProjectNameFilter, event.target.value)}>
                 <option value="">كل الجهات</option>
                 {projectNameOptions.map((projectName) => <option key={projectName} value={projectName}>{projectName}</option>)}
               </Select>
-              <Select value={invoiceStatusFilter} onChange={(event) => setFilter(setInvoiceStatusFilter, event.target.value as InvoiceStatus | "")}>
+              <Select className="w-full" value={invoiceStatusFilter} onChange={(event) => setFilter(setInvoiceStatusFilter, event.target.value as InvoiceStatus | "")}>
                 <option value="">كل الفواتير</option>
                 {invoiceStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </Select>
               {canAssign ? (
-                <Select value={collectorFilter} onChange={(event) => setFilter(setCollectorFilter, event.target.value)}>
+                <Select className="w-full" value={collectorFilter} onChange={(event) => setFilter(setCollectorFilter, event.target.value)}>
                   <option value="">كل المحصلين</option>
                   {collectorOptions.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
                 </Select>
               ) : null}
               {canAssign ? (
-                <Select value={supervisorFilter} onChange={(event) => setFilter(setSupervisorFilter, event.target.value)}>
+                <Select className="w-full" value={supervisorFilter} onChange={(event) => setFilter(setSupervisorFilter, event.target.value)}>
                   <option value="">كل المشرفين</option>
                   {supervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
                 </Select>
               ) : null}
-              <Select value={collectionStatusFilter} onChange={(event) => setFilter(setCollectionStatusFilter, event.target.value as CollectionStatus | "")}>
+              <Select className="w-full" value={collectionStatusFilter} onChange={(event) => setFilter(setCollectionStatusFilter, event.target.value as CollectionStatus | "")}>
                 <option value="">كل التحصيل</option>
                 {collectionStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </Select>
-              <Select value={debtYearFilter} onChange={(event) => setFilter(setDebtYearFilter, event.target.value)}>
+              <Select className="w-full" value={debtYearFilter} onChange={(event) => setFilter(setDebtYearFilter, event.target.value)}>
                 <option value="">كل السنوات</option>
                 {debtYearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
               </Select>
-              <Select value={sortValue} onChange={(event) => setFilter(setSortValue, event.target.value)}>
+              <Select className="w-full" value={sortValue} onChange={(event) => setFilter(setSortValue, event.target.value)}>
                 {sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </Select>
+              <div className="flex min-w-0 items-center gap-2 sm:col-span-2 xl:col-span-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="min-w-0 flex-1 px-3"
+                  icon={<Trash2 className="h-4 w-4" />}
+                  disabled={!hasSearchOrFilters}
+                  onClick={clearFilters}
+                >
+                  مسح الفلاتر
+                </Button>
+                {activeFiltersCount ? (
+                  <span className="inline-flex h-10 shrink-0 items-center rounded-xl bg-mint-50 px-3 text-xs font-black text-mint-800 ring-1 ring-mint-100">
+                    {activeFiltersCount} نشط
+                  </span>
+                ) : null}
+              </div>
             </div>
           )}
         />
 
-        {customersQuery.isLoading ? <TableSkeleton rows={6} columns={10} /> : null}
+        {customersQuery.isLoading && !customersQuery.data ? <TableSkeleton rows={6} columns={10} /> : null}
         {customersQuery.error ? <ErrorState error={customersQuery.error} /> : null}
         {customerItems.length === 0 && !customersQuery.isLoading ? (
           <EmptyState
             title={hasSearchOrFilters ? "لا توجد نتائج مطابقة" : "لا يوجد عملاء"}
-            description={hasSearchOrFilters ? "جرّب تعديل البحث أو الفلاتر الحالية." : "أضف عميلًا جديدًا أو استورد ملف CSV."}
+            description={hasSearchOrFilters ? "جرّب تعديل البحث أو الفلاتر الحالية." : "أضف عميلًا جديدًا أو استورد ملف Excel أو CSV."}
           />
         ) : null}
 
@@ -686,19 +731,19 @@ export function CustomersPage() {
                       <MessageCircle className="h-4 w-4" />
                     </Button>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <ProjectBadge projectName={customer.projectName} />
+                  <div className="flex flex-wrap gap-2 pb-1">
+                    <Badge tone="blue">{customer.activeDebtsCount ?? customer.debts?.filter((debt) => debt.isActive).length ?? 1} مديونية نشطة</Badge>
                     <InvoiceStatusBadge status={customer.invoiceStatus} />
-                    <Badge tone={isCustomerFullyPaid(customer) ? "green" : "red"}>{formatCurrency(customer.debtAmount)}</Badge>
+                    <Badge tone={isCustomerFullyPaid(customer) ? "green" : "red"}>{formatCurrency(customer.totalActiveDebtAmount ?? customer.debtAmount)}</Badge>
                     <Badge tone="neutral">{customerCollectorName(customer)}</Badge>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-sm text-ink-600">
+                  <div className="grid grid-cols-1 gap-2 text-sm text-ink-600 sm:grid-cols-2">
                     <span>الهاتف: <b dir="ltr">{customerPrimaryPhone(customer)}</b></span>
-                    <span>الحساب: <b dir="ltr">{customer.accountNumber}</b></span>
+                    <span>المشاريع: <b>{customer.debtProjects?.join("، ") || customer.projectName}</b></span>
                     <span>المشرف: {customerSupervisorName(customer)}</span>
                     <span>المحصل: {customerCollectorName(customer)}</span>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 pb-1">
                     <Button variant="secondary" size="sm" icon={<ClipboardList className="h-4 w-4" />} onClick={() => showCustomerDetails(customer)}>عرض التفاصيل</Button>
                     {canEdit ? <Button variant="secondary" size="sm" icon={<Edit2 className="h-4 w-4" />} onClick={() => openEditModal(customer)}>تعديل</Button> : null}
                     {canAssign ? <Button variant="secondary" size="sm" icon={<UserCog className="h-4 w-4" />} onClick={() => openEditModal(customer)}>تغيير المحصل</Button> : null}
@@ -707,16 +752,16 @@ export function CustomersPage() {
               ))}
             </div>
 
-            <TableShell className="hidden lg:block [&_td]:text-center [&_th]:text-center">
+            <TableShell className="hidden lg:block [&_td]:text-center [&_td]:whitespace-nowrap [&_th]:text-center [&_th]:whitespace-nowrap">
               <DataTable minWidth="1280px">
                 <TableHead>
                   <tr>
                     <TableHeaderCell>اسم العميل</TableHeaderCell>
                     <TableHeaderCell>رقم الهوية</TableHeaderCell>
                     <TableHeaderCell>رقم الهاتف الرئيسي</TableHeaderCell>
-                    <TableHeaderCell>الجهة</TableHeaderCell>
-                    <TableHeaderCell>رقم الحساب</TableHeaderCell>
-                    <TableHeaderCell>مبلغ المديونية</TableHeaderCell>
+                    <TableHeaderCell>المشاريع</TableHeaderCell>
+                    <TableHeaderCell>المديونيات النشطة</TableHeaderCell>
+                    <TableHeaderCell>إجمالي المديونية</TableHeaderCell>
                     <TableHeaderCell>حالة الفاتورة</TableHeaderCell>
                     <TableHeaderCell>اسم المحصل</TableHeaderCell>
                     <TableHeaderCell>اسم المشرف</TableHeaderCell>
@@ -729,7 +774,7 @@ export function CustomersPage() {
                       <TableCell>
                         <div className="flex min-w-[190px] items-center justify-center gap-3">
                           <div className="min-w-0">
-                            <p className="truncate font-black text-ink-900">{customerDisplayName(customer)}</p>
+                            <p className="max-w-[210px] truncate font-black text-ink-900">{customerDisplayName(customer)}</p>
                           </div>
                         </div>
                       </TableCell>
@@ -739,21 +784,18 @@ export function CustomersPage() {
                           <span className="font-bold text-ink-800" dir="ltr">{customerPrimaryPhone(customer)}</span>
                         </div>
                       </TableCell>
-                      <TableCell><ProjectBadge projectName={customer.projectName} /></TableCell>
+                      <TableCell>{customer.debtProjects?.join("، ") || customer.projectName}</TableCell>
                       <TableCell>
                         <div className="group flex items-center justify-center gap-1.5" dir="ltr">
-                          <span className="font-black text-mint-800">{customer.accountNumber}</span>
-                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-lg opacity-0 transition group-hover:opacity-100" title="نسخ رقم الحساب" onClick={() => copyText(customer.accountNumber, "رقم الحساب")}>
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
+                          <span className="font-black text-mint-800">{customer.activeDebtsCount ?? customer.debts?.filter((debt) => debt.isActive).length ?? 1}</span>
                         </div>
                       </TableCell>
                       <TableCell className={cn("font-black", customerDebtAmount(customer) > 0 && !isCustomerFullyPaid(customer) ? "text-red-700" : "text-mint-800")}>
-                        {formatCurrency(customer.debtAmount)}
+                        {formatCurrency(customer.totalActiveDebtAmount ?? customer.debtAmount)}
                       </TableCell>
                       <TableCell><InvoiceStatusBadge status={customer.invoiceStatus} /></TableCell>
-                      <TableCell>{customerCollectorName(customer)}</TableCell>
-                      <TableCell>{customerSupervisorName(customer)}</TableCell>
+                      <TableCell><span className="inline-block max-w-[150px] truncate align-middle">{customerCollectorName(customer)}</span></TableCell>
+                      <TableCell><span className="inline-block max-w-[150px] truncate align-middle">{customerSupervisorName(customer)}</span></TableCell>
                       <TableCell>
                         <div className="flex items-center justify-center gap-1.5">
                           <Button
@@ -778,8 +820,8 @@ export function CustomersPage() {
                 </TableBody>
               </DataTable>
             </TableShell>
-            <div className="flex flex-nowrap items-center justify-between gap-3 overflow-x-auto border-t border-surface-200 bg-surface-50 px-5 py-4">
-              <div className="flex shrink-0 flex-nowrap items-center gap-2 text-sm font-semibold text-ink-600">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-surface-200 bg-surface-50 px-5 py-4">
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-600">
                 <span>عرض</span>
                 <Select
                   className="w-24"
@@ -792,7 +834,7 @@ export function CustomersPage() {
                 <span>صف</span>
                 <span className="inline-flex min-w-max whitespace-nowrap rounded-full bg-white px-4 py-1.5 text-xs font-black shadow-sm">{totalCustomers} إجمالي</span>
               </div>
-              <div className="flex shrink-0 items-center justify-end gap-2">
+              <div className="flex items-center justify-end gap-2">
                 <Button
                   type="button"
                   variant="secondary"
@@ -980,7 +1022,7 @@ export function CustomersPage() {
       <Modal
         open={isImportModalOpen}
         title="استيراد العملاء"
-        description="ارفع ملف CSV يحتوي على بيانات العملاء والمديونيات وأرقام التواصل."
+        description="ارفع ملف Excel أو CSV يحتوي على بيانات العملاء والمديونيات وأرقام التواصل."
         onClose={() => setImportModalOpen(false)}
         footer={(
           <div className="flex flex-wrap justify-end gap-2">
@@ -996,10 +1038,10 @@ export function CustomersPage() {
       >
         <div className="space-y-5">
           <div className="rounded-2xl border border-dashed border-mint-200 bg-mint-50/70 p-5">
-            <FieldShell label="ملف CSV">
+            <FieldShell label="ملف Excel أو CSV">
               <Input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 onChange={(event) => {
                   setImportFile(event.target.files?.[0] || null);
                   setImportResult(null);
@@ -1015,6 +1057,7 @@ export function CustomersPage() {
               {[
                 "اسم العميل",
                 "رقم الهوية",
+                "الرقم الرئيسي",
                 "رقم الحساب",
                 "الجهة",
                 "مبلغ المديونية",
@@ -1035,7 +1078,9 @@ export function CustomersPage() {
               <Badge>ملاحظات السداد</Badge>
               <Badge>رقم الهاتف الفرعي1</Badge>
               <Badge>رقم الهاتف الفرعي2</Badge>
-              <Badge>اسم المحصل</Badge>
+              <Badge>المحصل</Badge>
+              <Badge>اسم المستخدم</Badge>
+              <Badge>المتابعة</Badge>
               <Badge>ملاحظات</Badge>
             </div>
           </div>
@@ -1048,8 +1093,21 @@ export function CustomersPage() {
                 <div className="rounded-2xl bg-blue-50 p-4"><p className="text-sm text-blue-700">تم التحديث</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.updated}</p></div>
                 <div className="rounded-2xl bg-amber-50 p-4"><p className="text-sm text-amber-800">تم التخطي</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.skipped}</p></div>
                 <div className="rounded-2xl bg-mint-50 p-4"><p className="text-sm text-mint-800">تم الإسناد</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.assigned}</p></div>
+                <div className="rounded-2xl bg-amber-50 p-4"><p className="text-sm text-amber-800">غير مسند</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.unassigned || 0}</p></div>
+                <div className="rounded-2xl bg-amber-50 p-4"><p className="text-sm text-amber-800">التحذيرات</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.warnings?.length || 0}</p></div>
                 <div className="rounded-2xl bg-red-50 p-4"><p className="text-sm text-red-700">الأخطاء</p><p className="mt-1 text-2xl font-black text-ink-900">{importResult.errors.length}</p></div>
               </div>
+
+              {importResult.warnings?.length ? (
+                <div className="max-h-56 overflow-auto rounded-2xl border border-amber-100">
+                  {importResult.warnings.map((warning, index) => (
+                    <div key={`${warning.row}-${index}`} className="flex items-center justify-between gap-3 border-b border-amber-100 px-4 py-3 text-sm last:border-b-0">
+                      <span className="font-bold text-ink-900">صف {warning.row}</span>
+                      <span className="text-amber-800">{warning.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {importResult.errors.length ? (
                 <div className="max-h-56 overflow-auto rounded-2xl border border-red-100">

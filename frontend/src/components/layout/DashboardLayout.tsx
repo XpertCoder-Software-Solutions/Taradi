@@ -2,11 +2,13 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell,
   BriefcaseBusiness,
+  FileText,
   Inbox,
   LayoutDashboard,
   LogOut,
   Megaphone,
   Menu,
+  MessageSquarePlus,
   Settings,
   Users,
   X
@@ -36,6 +38,8 @@ const navConfig: NavItem[] = [
   { to: "/employees", label: "الفريق", icon: Users, permissions: ["employees.view_team"] },
   { to: "/customers", label: "العملاء", icon: BriefcaseBusiness, permissions: ["customers.view_assigned", "customers.view_team"] },
   { to: "/campaigns", label: "الحملات الجماعية", icon: Megaphone, permissions: ["campaigns.view"] },
+  { to: "/whatsapp-templates", label: "قوالب واتساب", icon: FileText, permissions: ["templates.view"] },
+  { to: "/whatsapp-template-mappings", label: "ربط القوالب", icon: FileText, roles: ["ADMIN"] },
   { to: "/inbox", label: "المحادثات", icon: Inbox, permissions: ["chats.view_assigned", "chats.view_team"] },
   { to: "/notifications", label: "الإشعارات", icon: Bell, permissions: ["chats.view_assigned", "chats.view_team"] },
   { to: "/settings/notifications", label: "إعدادات الإشعارات", icon: Bell },
@@ -48,6 +52,7 @@ export function DashboardLayout() {
   const location = useLocation();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const navItems = navConfig.filter((item) => hasRole(item.roles) && hasAnyPermission(item.permissions));
+  const canQuickSend = hasAnyPermission(["chats.view_assigned", "chats.view_team"]) && hasAnyPermission(["chats.send_message"]);
   const activeItem = [...navConfig]
     .sort((a, b) => b.to.length - a.to.length)
     .find((item) => item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to));
@@ -84,6 +89,15 @@ export function DashboardLayout() {
   const openNotifications = () => {
     void requestBrowserNotificationPermission();
     navigate("/notifications");
+  };
+
+  const openQuickSend = () => {
+    const nextParams = new URLSearchParams(location.pathname.startsWith("/inbox") ? location.search : "");
+    nextParams.set("quickSend", "1");
+    navigate({
+      pathname: "/inbox",
+      search: `?${nextParams.toString()}`
+    });
   };
 
   const confirmLogout = async () => {
@@ -189,6 +203,11 @@ export function DashboardLayout() {
           </div>
           <div className="flex items-center gap-3">
             <RealtimeStatus />
+            {canQuickSend ? (
+              <Button variant="secondary" icon={<MessageSquarePlus className="h-4 w-4" />} onClick={openQuickSend}>
+                إرسال سريع
+              </Button>
+            ) : null}
             <div className="rounded-2xl bg-surface-50 px-3 py-2">
               <p className="text-sm font-bold text-ink-900">{user?.name}</p>
               <p className="text-[11px] text-ink-500">{user?.role ? roleLabel[user.role] : ""}</p>

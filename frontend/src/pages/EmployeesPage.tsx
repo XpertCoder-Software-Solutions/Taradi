@@ -1,10 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Download, Edit2, Power, PowerOff, RefreshCw, Search, ShieldCheck, UserPlus } from "lucide-react";
+import { Check, ChevronDown, Download, Edit2, FileSpreadsheet, Power, PowerOff, RefreshCw, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { activateEmployee, createEmployee, deactivateEmployee, listEmployees, updateEmployee } from "../api/employees.api";
+import { activateEmployee, createEmployee, deactivateEmployee, downloadEmployeeImportTemplate, downloadUserImportTemplate, importEmployeesExcel, importUsersExcel, listEmployees, updateEmployee, type UserImportResult } from "../api/employees.api";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card, CardBody } from "../components/ui/Card";
@@ -15,9 +15,10 @@ import { EmptyState, ErrorState, Skeleton } from "../components/ui/States";
 import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../contexts/ToastContext";
 import { cn } from "../lib/cn";
+import { debugLog } from "../lib/debug";
 import { translateApiError } from "../lib/i18n";
 import { showTaradiAlert, showTaradiConfirm } from "../lib/sweetAlert";
-import type { Role, User } from "../types/api";
+import type { EmployeeImportSummary, Role, User } from "../types/api";
 
 type StaffRole = Extract<Role, "SUPERVISOR" | "EMPLOYEE">;
 type ActiveFilter = "" | "true" | "false";
@@ -64,6 +65,14 @@ const employeeSchema = z.object({
       message: "اسم المشرف مطلوب"
     });
   }
+
+  if (values.password && values.password.length < 8) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["password"],
+      message: "كلمة المرور يجب ألا تقل عن 8 أحرف"
+    });
+  }
 });
 
 type EmployeeValues = z.infer<typeof employeeSchema>;
@@ -92,6 +101,8 @@ const employeeColumns = [
   { key: "supervisorName", label: "اسم المشرف" },
   { key: "assignedCustomersCount", label: "عدد العملاء" },
   { key: "isActive", label: "حالة الحساب" },
+  { key: "isOnline", label: "حالة الاتصال" },
+  { key: "lastSeenAt", label: "آخر ظهور" },
   { key: "createdAt", label: "تاريخ إنشاء الحساب" },
   { key: "actions", label: "الإجراءات" }
 ] as const;
@@ -102,14 +113,16 @@ const supervisorColumns = [
   { key: "directReportsCount", label: "عدد الموظفين" },
   { key: "assignedCustomersCount", label: "عدد العملاء" },
   { key: "isActive", label: "حالة الحساب" },
+  { key: "isOnline", label: "حالة الاتصال" },
+  { key: "lastSeenAt", label: "آخر ظهور" },
   { key: "createdAt", label: "تاريخ إنشاء الحساب" },
   { key: "actions", label: "الإجراءات" }
 ] as const;
 
 type ColumnKey = typeof employeeColumns[number]["key"] | typeof supervisorColumns[number]["key"];
 
-const tableHeadCellClass = "px-1.5 py-3 text-center align-middle text-[11px] leading-5 sm:px-2 md:px-3";
-const tableCellClass = "overflow-hidden px-1.5 py-3 text-center align-middle sm:px-2 md:px-3";
+const tableHeadCellClass = "whitespace-nowrap px-2 py-3 text-center align-middle text-[11px] leading-5 sm:px-3";
+const tableCellClass = "whitespace-nowrap px-2 py-3 text-center align-middle sm:px-3";
 
 function formatDateOnly(value?: string | null) {
   const date = parseDate(value);
@@ -170,9 +183,9 @@ function supervisorLabel(employee: User) {
 
 function StatusBadge({ isActive }: { isActive: boolean }) {
   return isActive ? (
-    <Badge tone="green" className="max-w-full justify-center whitespace-normal text-center leading-5">🟢 نشط</Badge>
+    <Badge tone="green" className="max-w-full justify-center text-center leading-5">🟢 نشط</Badge>
   ) : (
-    <Badge tone="red" className="max-w-full justify-center whitespace-normal text-center leading-5">🔴 معطل</Badge>
+    <Badge tone="red" className="max-w-full justify-center text-center leading-5">🔴 معطل</Badge>
   );
 }
 
@@ -210,69 +223,60 @@ function isYesterday(date: Date, now: Date) {
   return isSameDay(date, yesterday);
 }
 
-function getLastSeenRelative(value?: string | null) {
+function formatLastSeen(value?: string | null) {
   const date = parseDate(value);
 
   if (!date) {
-    return "غير متاح";
+    return "آخر ظهور: غير متاح";
   }
 
   const now = new Date();
   const diffMinutes = Math.max(Math.floor((now.getTime() - date.getTime()) / 60000), 0);
 
   if (diffMinutes < 1) {
-    return "الآن";
-  }
-
-  if (diffMinutes === 1) {
-    return "منذ دقيقة";
+    return "آخر ظهور: منذ لحظات";
   }
 
   if (diffMinutes < 60) {
-    return `منذ ${diffMinutes} دقيقة`;
+    return diffMinutes === 1 ? "آخر ظهور: منذ دقيقة" : `آخر ظهور: منذ ${diffMinutes} دقيقة`;
   }
 
-  if (diffMinutes < 120) {
-    return "منذ ساعة";
-  }
+  const diffHours = Math.floor(diffMinutes / 60);
 
-  if (diffMinutes < 180) {
-    return "منذ ساعتين";
+  if (diffHours < 24 && isSameDay(date, now)) {
+    return diffHours === 1 ? "آخر ظهور: منذ ساعة" : `آخر ظهور: منذ ${diffHours} ساعة`;
   }
 
   if (isSameDay(date, now)) {
-    return "اليوم";
+    return "آخر ظهور: اليوم";
   }
 
   if (isYesterday(date, now)) {
-    return "أمس";
+    return "آخر ظهور: أمس";
   }
 
-  return formatDateOnly(value);
+  return `آخر ظهور: ${formatDateOnly(value)}`;
 }
 
-function ConnectionStatusBadge({ employee }: { employee: User }) {
-  if (employee.isOnline) {
-    return (
-      <div title="متصل الآن" className="space-y-1">
-        <Badge className="max-w-full justify-center whitespace-normal bg-mint-100 text-center leading-5 text-mint-800">
-          متصل الآن
-        </Badge>
-      </div>
-    );
-  }
+function ConnectionStatusBadge({ isOnline }: { isOnline?: boolean }) {
+  return isOnline ? (
+    <Badge className="max-w-full justify-center bg-mint-100 text-center leading-5 text-mint-800">
+      متصل الآن
+    </Badge>
+  ) : (
+    <Badge className="max-w-full justify-center bg-surface-100 text-center leading-5 text-ink-600">
+      غير متصل
+    </Badge>
+  );
+}
 
-  const tooltip = formatExactDateTime(employee.lastSeenAt);
+function LastSeenText({ employee }: { employee: User }) {
+  const text = employee.isOnline ? "متصل الآن" : formatLastSeen(employee.lastSeenAt);
 
   return (
-    <div title={tooltip} className="space-y-1">
-      <Badge className="max-w-full justify-center whitespace-normal bg-surface-100 text-center leading-5 text-ink-600">
-        غير متصل
-      </Badge>
-      <p className="text-[10px] font-black leading-4 text-ink-700">
-        آخر ظهور: {getLastSeenRelative(employee.lastSeenAt)}
-      </p>
-    </div>
+    <span title={employee.isOnline ? "متصل الآن" : formatExactDateTime(employee.lastSeenAt)} className="inline-block whitespace-nowrap text-xs font-black leading-5 text-ink-700">
+      {text}
+    </span>
   );
 }
 
@@ -428,7 +432,7 @@ function EmployeeTableSkeleton() {
 export function EmployeesPage() {
   const { user, hasPermission } = useAuth();
   const isAdmin = user?.role === "ADMIN";
-  const [activeTab, setActiveTab] = useState<StaffRole>("SUPERVISOR");
+  const [activeTab, setActiveTab] = useState<StaffRole>("EMPLOYEE");
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("");
   const [supervisorFilter, setSupervisorFilter] = useState("");
@@ -440,9 +444,15 @@ export function EmployeesPage() {
   const [showColumnPanel, setShowColumnPanel] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [isModalOpen, setModalOpen] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [importRole, setImportRole] = useState<StaffRole>("EMPLOYEE");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<UserImportResult | EmployeeImportSummary | null>(null);
+  const [isImportModalOpen, setImportModalOpen] = useState(false);
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const activeColumns = activeTab === "SUPERVISOR" ? supervisorColumns : employeeColumns;
+  const isSupervisor = user?.role === "SUPERVISOR";
 
   useEffect(() => {
     if (!isAdmin && activeTab === "SUPERVISOR") {
@@ -477,6 +487,11 @@ export function EmployeesPage() {
     queryFn: () => listEmployees({ limit: 100, role: "SUPERVISOR", isActive: true }),
     enabled: isAdmin
   });
+  const supervisorOptions = isAdmin
+    ? supervisorsQuery.data?.items || []
+    : isSupervisor && user
+      ? [user]
+      : [];
 
   const form = useForm<EmployeeValues>({
     resolver: zodResolver(employeeSchema),
@@ -493,6 +508,7 @@ export function EmployeesPage() {
   const saveMutation = useMutation({
     mutationFn: async (values: EmployeeValues) => {
       const role = values.role;
+      const supervisorId = isSupervisor && user ? user.id : values.supervisorId || null;
       const basePayload = {
         employeeName: values.employeeName,
         ...(values.password ? { password: values.password } : {}),
@@ -509,7 +525,7 @@ export function EmployeesPage() {
           ...basePayload,
           role,
           employeeCode: values.employeeCode || "",
-          supervisorId: values.supervisorId || null
+          supervisorId
         };
 
       if (editing) {
@@ -536,10 +552,7 @@ export function EmployeesPage() {
         return;
       }
 
-      void showTaradiAlert({
-        title: savedRole === "SUPERVISOR" ? "تم إضافة المشرف بنجاح" : "تم إضافة الموظف بنجاح",
-        icon: "success"
-      });
+      pushToast({ title: "تمت إضافة الموظف بنجاح.", tone: "success" });
     },
     onError: (error) => pushToast({ title: "حدث خطأ أثناء تنفيذ العملية", description: translateApiError(error), tone: "error" })
   });
@@ -559,13 +572,42 @@ export function EmployeesPage() {
     onError: (error) => pushToast({ title: "حدث خطأ أثناء تنفيذ العملية", description: translateApiError(error), tone: "error" })
   });
 
+  const importMutation = useMutation<UserImportResult | EmployeeImportSummary, Error, { role: StaffRole; file: File }>({
+    mutationFn: ({ role, file }: { role: StaffRole; file: File }) => role === "EMPLOYEE"
+      ? importEmployeesExcel(file)
+      : importUsersExcel(role, file),
+    onSuccess: (result) => {
+      setImportResult(result);
+      queryClient.invalidateQueries({ queryKey: ["employees"] });
+      const succeeded = "imported" in result ? result.imported : result.created + result.updated;
+      const failed = "failedRows" in result ? result.failedRows.length : result.failed;
+      pushToast({
+        title: "اكتمل استيراد المستخدمين",
+        description: `تم استيراد ${succeeded} وتعذر استيراد ${failed}.`,
+        tone: "success"
+      });
+    },
+    onError: (error) => pushToast({ title: "تعذر استيراد الموظفين", description: translateApiError(error), tone: "error" })
+  });
+
   const employees = employeesQuery.data?.items || [];
   const total = employeesQuery.data?.meta.total || 0;
   const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+  const hasLoadedEmployees = employeesQuery.isSuccess;
   const hasActiveSearch = Boolean(search || activeFilter || supervisorFilter);
-  const canCreate = hasPermission("employees.create") && isAdmin;
+  const canCreate = hasPermission("employees.create") || hasPermission("employees.view_team");
   const canEdit = hasPermission("employees.edit") && isAdmin;
   const canToggle = hasPermission("employees.activate_deactivate") && isAdmin;
+  const canImportEmployees = isAdmin || isSupervisor;
+  const importErrors = importResult
+    ? "failedRows" in importResult ? importResult.failedRows : importResult.errors
+    : [];
+  const importedCount = importResult
+    ? "imported" in importResult ? importResult.imported : importResult.created + importResult.updated
+    : 0;
+  const failedImportCount = importResult
+    ? "failed" in importResult && typeof importResult.failed === "number" ? importResult.failed : importErrors.length
+    : 0;
   const visibleColumnCount = activeColumns.filter((column) => visibleColumns[column.key]).length;
   const isSupervisorForm = selectedRole === "SUPERVISOR";
   const staffLabel = isSupervisorForm ? "المشرف" : "الموظف";
@@ -581,11 +623,37 @@ export function EmployeesPage() {
     ? hasActiveSearch ? "لا يوجد مشرفون مطابقون لنتائج البحث" : "لا يوجد مشرفون"
     : hasActiveSearch ? "لا يوجد موظفون مطابقون لنتائج البحث" : "لا يوجد موظفون";
 
+  useEffect(() => {
+    debugLog("Employees page active role filter", {
+      activeTab,
+      roleFilter: activeTab,
+      activeFilter: activeFilter || "ALL",
+      supervisorId: activeTab === "EMPLOYEE" ? supervisorFilter || null : null,
+      page,
+      pageSize
+    });
+  }, [activeFilter, activeTab, page, pageSize, supervisorFilter]);
+
+  useEffect(() => {
+    if (!employeesQuery.isSuccess) {
+      return;
+    }
+
+    debugLog("Employees page received employees", {
+      activeTab,
+      count: employees.length,
+      total,
+      responsePage: employeesQuery.data.meta.page,
+      responseLimit: employeesQuery.data.meta.limit
+    });
+  }, [activeTab, employees.length, employeesQuery.data, employeesQuery.isSuccess, total]);
+
   function openCreateModal() {
     setEditing(null);
     form.reset({
       ...defaultValues,
-      role: activeTab,
+      role: isSupervisor ? "EMPLOYEE" : activeTab,
+      supervisorId: isSupervisor && user ? user.id : "",
       isActive: true
     });
     setModalOpen(true);
@@ -608,6 +676,11 @@ export function EmployeesPage() {
   function submit(values: EmployeeValues) {
     if (!editing && !values.password) {
       form.setError("password", { message: "كلمة المرور مطلوبة عند الإنشاء" });
+      return;
+    }
+
+    if (values.password && values.password.length < 8) {
+      form.setError("password", { message: "كلمة المرور يجب ألا تقل عن 8 أحرف" });
       return;
     }
 
@@ -641,6 +714,8 @@ export function EmployeesPage() {
         directReportsCount(employee),
         assignedCount(employee),
         employee.isActive ? "نشط" : "معطل",
+        employee.isOnline ? "متصل الآن" : "غير متصل",
+        employee.isOnline ? "متصل الآن" : formatLastSeen(employee.lastSeenAt),
         formatDateOnly(employee.createdAt)
       ]
       : [
@@ -649,6 +724,8 @@ export function EmployeesPage() {
         supervisorLabel(employee),
         assignedCount(employee),
         employee.isActive ? "نشط" : "معطل",
+        employee.isOnline ? "متصل الآن" : "غير متصل",
+        employee.isOnline ? "متصل الآن" : formatLastSeen(employee.lastSeenAt),
         formatDateOnly(employee.createdAt)
       ]);
     const csv = [header, ...rows]
@@ -661,6 +738,22 @@ export function EmployeesPage() {
     link.download = "taradi-employees.csv";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function handleImportFile(file: File | null) {
+    setImportFile(file);
+    setImportResult(null);
+  }
+
+  function openImport(role: StaffRole) {
+    setImportRole(role); setImportFile(null); setImportResult(null); setImportModalOpen(true);
+  }
+
+  function downloadErrors() {
+    if (!importErrors.length) return;
+    const csv = ["row,reason", ...importErrors.map((error) => `${error.row},"${error.reason.replace(/"/g, '""')}"`)].join("\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = "user-import-errors.csv"; link.click(); URL.revokeObjectURL(url);
   }
 
   return (
@@ -696,8 +789,8 @@ export function EmployeesPage() {
             </button>
           </div>
 
-          <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(320px,0.85fr)_minmax(0,300px)_auto] xl:items-center">
-            <div className="relative min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <div className="relative min-w-[260px] flex-1">
               <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500" />
               <Input
                 className="pr-9"
@@ -707,8 +800,9 @@ export function EmployeesPage() {
               />
             </div>
 
-            <div className={cn("grid min-w-0 gap-2", activeTab === "EMPLOYEE" && isAdmin ? "sm:grid-cols-2 xl:grid-cols-[150px_minmax(0,150px)]" : "xl:grid-cols-[150px]")}>
+            <div className="flex flex-wrap gap-2">
               <PremiumSelect
+                className="w-36"
                 value={activeFilter}
                 ariaLabel="الحالة"
                 options={[
@@ -720,6 +814,7 @@ export function EmployeesPage() {
               />
               {isAdmin && activeTab === "EMPLOYEE" ? (
                 <PremiumSelect
+                  className="w-44"
                   value={supervisorFilter}
                   ariaLabel="المشرف"
                   options={[
@@ -734,8 +829,9 @@ export function EmployeesPage() {
               ) : null}
             </div>
 
-            <div className="flex min-w-0 items-center justify-start gap-2 overflow-hidden xl:justify-end">
-              {canCreate ? <Button className="px-3" icon={<UserPlus className="h-4 w-4" />} onClick={openCreateModal}>{activeTab === "SUPERVISOR" ? "إضافة مشرف" : "إضافة موظف"}</Button> : null}
+            <div className="flex flex-wrap items-center justify-start gap-2">
+              {canImportEmployees ? <Button className="px-3" variant="secondary" icon={<FileSpreadsheet className="h-4 w-4" />} onClick={() => openImport("EMPLOYEE")}>استيراد الموظفين</Button> : null}
+              {canCreate ? <Button className="px-3" icon={<UserPlus className="h-4 w-4" />} onClick={openCreateModal}>{isAdmin && activeTab === "SUPERVISOR" ? "إضافة مشرف" : "إضافة موظف"}</Button> : null}
               <Button className="px-3" variant="secondary" icon={<RefreshCw className={cn("h-4 w-4", employeesQuery.isFetching && "animate-spin")} />} onClick={() => employeesQuery.refetch()}>
                 تحديث
               </Button>
@@ -746,28 +842,32 @@ export function EmployeesPage() {
           </div>
         </CardBody>
 
-        <div className="max-h-[68vh] overflow-y-auto overflow-x-hidden border-t border-surface-200">
-          <table className="w-full table-fixed border-separate border-spacing-0 text-right text-[11px] sm:text-xs md:text-sm">
+        <div className="max-h-[68vh] overflow-auto border-t border-surface-200">
+          <table className="w-full min-w-[1320px] table-fixed border-separate border-spacing-0 text-right text-[11px] sm:text-xs md:text-sm">
             <colgroup>
               {activeTab === "SUPERVISOR" ? (
                 <>
                   {visibleColumns.fullName ? <col style={{ width: "20%" }} /> : null}
-                  {visibleColumns.email ? <col style={{ width: "22%" }} /> : null}
-                  {visibleColumns.directReportsCount ? <col style={{ width: "12%" }} /> : null}
-                  {visibleColumns.assignedCustomersCount ? <col style={{ width: "12%" }} /> : null}
-                  {visibleColumns.isActive ? <col style={{ width: "10%" }} /> : null}
-                  {visibleColumns.createdAt ? <col style={{ width: "12%" }} /> : null}
-                  {visibleColumns.actions ? <col style={{ width: "12%" }} /> : null}
+                  {visibleColumns.email ? <col style={{ width: "18%" }} /> : null}
+                  {visibleColumns.directReportsCount ? <col style={{ width: "9%" }} /> : null}
+                  {visibleColumns.assignedCustomersCount ? <col style={{ width: "9%" }} /> : null}
+                  {visibleColumns.isActive ? <col style={{ width: "8%" }} /> : null}
+                  {visibleColumns.isOnline ? <col style={{ width: "10%" }} /> : null}
+                  {visibleColumns.lastSeenAt ? <col style={{ width: "12%" }} /> : null}
+                  {visibleColumns.createdAt ? <col style={{ width: "8%" }} /> : null}
+                  {visibleColumns.actions ? <col style={{ width: "6%" }} /> : null}
                 </>
               ) : (
                 <>
-                  {visibleColumns.employeeCode ? <col style={{ width: "13%" }} /> : null}
-                  {visibleColumns.fullName ? <col style={{ width: "20%" }} /> : null}
-                  {visibleColumns.supervisorName ? <col style={{ width: "17%" }} /> : null}
-                  {visibleColumns.assignedCustomersCount ? <col style={{ width: "14%" }} /> : null}
-                  {visibleColumns.isActive ? <col style={{ width: "10%" }} /> : null}
-                  {visibleColumns.createdAt ? <col style={{ width: "13%" }} /> : null}
-                  {visibleColumns.actions ? <col style={{ width: "13%" }} /> : null}
+                  {visibleColumns.employeeCode ? <col style={{ width: "10%" }} /> : null}
+                  {visibleColumns.fullName ? <col style={{ width: "16%" }} /> : null}
+                  {visibleColumns.supervisorName ? <col style={{ width: "14%" }} /> : null}
+                  {visibleColumns.assignedCustomersCount ? <col style={{ width: "10%" }} /> : null}
+                  {visibleColumns.isActive ? <col style={{ width: "8%" }} /> : null}
+                  {visibleColumns.isOnline ? <col style={{ width: "10%" }} /> : null}
+                  {visibleColumns.lastSeenAt ? <col style={{ width: "12%" }} /> : null}
+                  {visibleColumns.createdAt ? <col style={{ width: "10%" }} /> : null}
+                  {visibleColumns.actions ? <col style={{ width: "10%" }} /> : null}
                 </>
               )}
             </colgroup>
@@ -793,7 +893,7 @@ export function EmployeesPage() {
                   </td>
                 </tr>
               ) : null}
-              {!employeesQuery.isLoading && !employeesQuery.error && employees.length === 0 ? (
+              {!employeesQuery.isLoading && !employeesQuery.error && hasLoadedEmployees && employees.length === 0 ? (
                 <tr>
                   <td colSpan={visibleColumnCount}>
                     <EmptyState title={emptyTitle} />
@@ -806,11 +906,11 @@ export function EmployeesPage() {
                     <>
                       {visibleColumns.fullName ? (
                         <td className={tableCellClass}>
-                          <p className="break-words font-black leading-6 text-ink-900">{employeeName(employee)}</p>
+                          <p className="truncate font-black leading-6 text-ink-900">{employeeName(employee)}</p>
                         </td>
                       ) : null}
                       {visibleColumns.email ? (
-                        <td className={cn(tableCellClass, "break-all font-semibold text-ink-700")} dir="ltr">{employee.email || "—"}</td>
+                        <td className={cn(tableCellClass, "truncate font-semibold text-ink-700")} dir="ltr">{employee.email || "—"}</td>
                       ) : null}
                       {visibleColumns.directReportsCount ? (
                         <td className={tableCellClass}>
@@ -831,18 +931,18 @@ export function EmployeesPage() {
                     <>
                       {visibleColumns.employeeCode ? (
                         <td className={tableCellClass}>
-                          <span className="block break-all px-1 font-black text-ink-900 sm:px-2">
+                          <span className="block truncate px-1 font-black text-ink-900 sm:px-2">
                             <span dir="ltr">{employee.employeeCode || "-"}</span>
                           </span>
                         </td>
                       ) : null}
                       {visibleColumns.fullName ? (
                         <td className={tableCellClass}>
-                          <p className="break-words font-black leading-6 text-ink-900">{employeeName(employee)}</p>
+                          <p className="truncate font-black leading-6 text-ink-900">{employeeName(employee)}</p>
                         </td>
                       ) : null}
                       {visibleColumns.supervisorName ? (
-                        <td className={cn(tableCellClass, "break-words font-semibold leading-6 text-ink-700")}>{supervisorLabel(employee)}</td>
+                        <td className={cn(tableCellClass, "truncate font-semibold leading-6 text-ink-700")}>{supervisorLabel(employee)}</td>
                       ) : null}
                       {visibleColumns.assignedCustomersCount ? (
                         <td className={tableCellClass}>
@@ -856,12 +956,18 @@ export function EmployeesPage() {
                   {visibleColumns.isActive ? (
                     <td className={tableCellClass}><StatusBadge isActive={employee.isActive} /></td>
                   ) : null}
+                  {visibleColumns.isOnline ? (
+                    <td className={tableCellClass}><ConnectionStatusBadge isOnline={employee.isOnline} /></td>
+                  ) : null}
+                  {visibleColumns.lastSeenAt ? (
+                    <td className={tableCellClass}><LastSeenText employee={employee} /></td>
+                  ) : null}
                   {visibleColumns.createdAt ? (
-                    <td className={cn(tableCellClass, "break-all font-medium text-ink-500")} dir="ltr">{formatDateOnly(employee.createdAt)}</td>
+                    <td className={cn(tableCellClass, "font-medium text-ink-500")} dir="ltr">{formatDateOnly(employee.createdAt)}</td>
                   ) : null}
                   {visibleColumns.actions ? (
                     <td className={tableCellClass}>
-                      <div className="flex flex-wrap items-center justify-center gap-1.5">
+                      <div className="flex flex-nowrap items-center justify-center gap-1.5">
                         {canEdit ? (
                           <IconButton label="تعديل" onClick={() => openEditModal(employee)}>
                             <Edit2 className="h-4 w-4" />
@@ -895,8 +1001,8 @@ export function EmployeesPage() {
           </table>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-surface-200 bg-surface-50 px-5 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-600">
+        <div className="flex flex-nowrap items-center justify-between gap-3 overflow-x-auto border-t border-surface-200 bg-surface-50 px-5 py-4">
+          <div className="flex shrink-0 flex-nowrap items-center gap-2 text-sm font-semibold text-ink-600">
             <span>عرض</span>
             <PremiumSelect
               className="w-24"
@@ -908,7 +1014,7 @@ export function EmployeesPage() {
             <span>صف</span>
             <span className="rounded-full bg-white px-3 py-1 text-xs shadow-sm">{total} إجمالي</span>
           </div>
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex shrink-0 items-center justify-end gap-2">
             <Button variant="secondary" disabled={page <= 1 || employeesQuery.isFetching} onClick={() => setPage((value) => Math.max(value - 1, 1))}>
               السابق
             </Button>
@@ -921,6 +1027,29 @@ export function EmployeesPage() {
           </div>
         </div>
       </Card>
+
+      <Modal
+        open={isImportModalOpen}
+        title={importRole === "SUPERVISOR" ? "استيراد المشرفين" : "استيراد الموظفين"}
+        description={importRole === "EMPLOYEE"
+          ? "ارفع ملف Excel بالأعمدة: الاسم، التحويلة، اسم المشرف، كلمة المرور، حالة الحساب"
+          : "ارفع ملف Excel بالأعمدة: name, email, phone, employeeCode"}
+        onClose={() => !importMutation.isPending && setImportModalOpen(false)}
+        footer={<div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={() => importRole === "EMPLOYEE" ? downloadEmployeeImportTemplate() : downloadUserImportTemplate(importRole)} icon={<Download className="h-4 w-4" />}>تحميل القالب</Button>
+          {importErrors.length ? <Button variant="secondary" onClick={downloadErrors} icon={<Download className="h-4 w-4" />}>تنزيل تقرير الأخطاء CSV</Button> : null}
+          <Button disabled={!importFile || importMutation.isPending} onClick={() => importFile && importMutation.mutate({ role: importRole, file: importFile })} icon={<FileSpreadsheet className={cn("h-4 w-4", importMutation.isPending && "animate-pulse")} />}>{importMutation.isPending ? "جاري الاستيراد..." : "بدء الاستيراد"}</Button>
+        </div>}
+      >
+        <div className="space-y-4">
+          <input ref={importInputRef} type="file" accept=".xlsx,.xls" onChange={(event) => handleImportFile(event.target.files?.[0] || null)} className="block w-full rounded-xl border border-surface-200 p-3 text-sm" />
+          <div className="rounded-xl bg-surface-50 p-3 text-sm font-bold">اسم الملف: {importFile?.name || "لم يتم اختيار ملف"}<br />عدد الصفوف: {importResult?.totalRows ?? "يظهر بعد الاستيراد"}</div>
+          {importResult ? <div className="grid grid-cols-3 gap-2 text-center"><Badge tone="neutral">الإجمالي {importResult.totalRows}</Badge><Badge tone="green">تم {importedCount}</Badge><Badge tone={failedImportCount ? "red" : "green"}>فشل {failedImportCount}</Badge></div> : null}
+          {importResult && "created" in importResult ? <div className="grid grid-cols-3 gap-2 text-center text-xs"><Badge tone="green">جديد {importResult.created}</Badge><Badge tone="neutral">تم تحديثه {importResult.updated}</Badge><Badge tone="neutral">مشرف جديد {importResult.supervisorsCreated || 0}</Badge></div> : null}
+          {importResult && "users" in importResult && importResult.users.length ? <div className="max-h-52 overflow-auto rounded-xl border"><table className="w-full text-xs"><thead><tr><th className="p-2">الاسم</th><th>البريد</th><th>كلمة المرور المؤقتة</th></tr></thead><tbody>{importResult.users.map((item) => <tr key={item.employeeCode} className="border-t"><td className="p-2">{item.name}</td><td dir="ltr">{item.email}</td><td dir="ltr" className="font-mono">{item.temporaryPassword}</td></tr>)}</tbody></table></div> : null}
+          {importErrors.length ? <div className="max-h-52 overflow-auto rounded-xl border border-red-100"><table className="w-full text-xs"><thead><tr><th className="p-2">الصف</th><th>السبب</th></tr></thead><tbody>{importErrors.map((error) => <tr key={`${error.row}-${error.reason}`} className="border-t"><td className="p-2 text-center">{error.row}</td><td className="p-2 text-red-700">{error.reason}</td></tr>)}</tbody></table></div> : null}
+        </div>
+      </Modal>
 
       <Modal
         open={isModalOpen}
@@ -971,12 +1100,13 @@ export function EmployeesPage() {
                   value={form.watch("supervisorId") || ""}
                   ariaLabel="اسم المشرف"
                   options={[
-                    { value: "", label: "اختر المشرف" },
-                    ...(supervisorsQuery.data?.items.map((supervisor) => ({
+                    ...(isSupervisor ? [] : [{ value: "", label: "اختر المشرف" }]),
+                    ...supervisorOptions.map((supervisor) => ({
                       value: supervisor.id,
                       label: employeeName(supervisor)
-                    })) || [])
+                    }))
                   ]}
+                  disabled={isSupervisor}
                   onChange={(nextValue) => form.setValue("supervisorId", nextValue, {
                     shouldDirty: true,
                     shouldValidate: true

@@ -15,8 +15,14 @@ const sendMessageSchema = z.object({
   text: z.string().trim().min(1).max(4096)
 });
 
+const quickSendSchema = z.object({
+  phone: z.string().trim().min(1).max(32),
+  message: z.string().trim().min(1).max(4096),
+  assignedToId: z.string().uuid().optional().nullable()
+});
+
 const sendMediaSchema = z.object({
-  type: z.enum(["image", "audio", "voice", "document"]),
+  type: z.enum(["image", "audio", "voice", "video", "document"]).optional(),
   caption: z.string().trim().max(1024).optional()
 });
 
@@ -73,6 +79,13 @@ const sendMessage = asyncHandler(async (req, res) => {
   res.success(result, 201);
 });
 
+const quickSend = asyncHandler(async (req, res) => {
+  const data = parse(quickSendSchema, req.body);
+  const result = await messageService.quickSend(req.user, data);
+
+  res.success(result, 201);
+});
+
 const sendMediaMessage = asyncHandler(async (req, res) => {
   const { customerId } = parse(customerIdParamsSchema, req.params);
   const data = parse(sendMediaSchema, req.body);
@@ -116,6 +129,7 @@ module.exports = {
   listChats,
   listMessages,
   sendMessage,
+  quickSend,
   sendMediaMessage,
   markRead,
   updateStatus,

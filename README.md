@@ -62,6 +62,12 @@ Clean Node.js backend MVP for Taradi's WhatsApp CRM.
    npm run worker:whatsapp
    ```
 
+9. In a third terminal, start the WhatsApp webhook worker:
+
+   ```bash
+   npm run worker:webhook
+   ```
+
 The API runs at `http://localhost:4000` by default.
 
 Swagger UI is available at:
@@ -89,20 +95,41 @@ LOG_LEVEL=info
 REDIS_URL=redis://localhost:6379
 RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX=300
+RATE_LIMIT_REDIS_ENABLED=true
+RATE_LIMIT_REDIS_REQUIRED=false
+RATE_LIMIT_REDIS_PREFIX=taradi:rate-limit
 AUTH_RATE_LIMIT_WINDOW_MS=900000
 AUTH_RATE_LIMIT_MAX=20
 WEBHOOK_RATE_LIMIT_WINDOW_MS=60000
 WEBHOOK_RATE_LIMIT_MAX=600
+MESSAGE_RATE_LIMIT_WINDOW_MS=60000
+MESSAGE_RATE_LIMIT_MAX=60
+UPLOAD_RATE_LIMIT_WINDOW_MS=60000
+UPLOAD_RATE_LIMIT_MAX=20
+IMPORT_RATE_LIMIT_WINDOW_MS=3600000
+IMPORT_RATE_LIMIT_MAX=5
+CAMPAIGN_RATE_LIMIT_WINDOW_MS=600000
+CAMPAIGN_RATE_LIMIT_MAX=10
+TEMPLATE_SYNC_RATE_LIMIT_WINDOW_MS=600000
+TEMPLATE_SYNC_RATE_LIMIT_MAX=5
 WHATSAPP_QUEUE_CONCURRENCY=5
+WEBHOOK_QUEUE_CONCURRENCY=5
+WEBHOOK_QUEUE_ATTEMPTS=3
+WEBHOOK_QUEUE_BACKOFF_MS=5000
 UPLOAD_MAX_FILE_SIZE_MB=16
 WHATSAPP_TOKEN=replace-with-whatsapp-cloud-api-token
+SYSTEM_USER_TOKEN=replace-with-system-user-token-for-template-sync
+WHATSAPP_ACCESS_TOKEN=replace-with-whatsapp-business-management-token
 WHATSAPP_PHONE_NUMBER_ID=replace-with-phone-number-id
 WHATSAPP_BUSINESS_ACCOUNT_ID=replace-with-business-account-id
 WHATSAPP_VERIFY_TOKEN=taradi-local-webhook-verify-token
 META_APP_SECRET=
 VERIFY_META_SIGNATURE=false
+META_GRAPH_API_VERSION=v23.0
 META_API_VERSION=v25.0
 ```
+
+In production, leave `RATE_LIMIT_REDIS_REQUIRED` unset or set it to `true`; startup fails if production is configured to use process-local rate limiting.
 
 ## Local Services
 
@@ -111,7 +138,7 @@ META_API_VERSION=v25.0
 - PostgreSQL 16 Alpine on `localhost:5432`
 - Redis 7 Alpine on `localhost:6379`
 
-Both services use persistent named volumes and healthchecks. Redis powers BullMQ outbound WhatsApp jobs.
+Both services use persistent named volumes and healthchecks. Redis powers BullMQ outbound WhatsApp jobs, inbound webhook jobs, and shared rate limiting.
 
 ## Meta WhatsApp Setup
 
@@ -119,7 +146,9 @@ Use only official Meta WhatsApp Business Platform credentials:
 
 - `WHATSAPP_PHONE_NUMBER_ID`: get it from Meta Developers > your app > WhatsApp > API Setup > From phone number. Use the numeric Phone Number ID, not the display phone number and not the WhatsApp Business Account ID.
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`: get it from WhatsApp Manager or Business Settings. This is the WABA ID and is only for WABA-level operations.
-- `WHATSAPP_TOKEN`: use a System User access token from Business Settings > Users > System users. Assign the app and WhatsApp account assets to the system user.
+- `WHATSAPP_TOKEN`: token used by phone-number-scoped Cloud API calls such as sending messages and media operations.
+- `WHATSAPP_ACCESS_TOKEN` or `SYSTEM_USER_TOKEN`: required management-capable token for template synchronization. It needs `whatsapp_business_management`; some Meta Business setups also require `business_management`.
+- `META_GRAPH_API_VERSION`: Graph API version used for template sync and WhatsApp Cloud API calls. `META_API_VERSION` is still accepted as the existing equivalent name.
 
 Required token permissions:
 
@@ -134,13 +163,21 @@ Phone-number-scoped Cloud API operations such as sending messages and uploading 
 
 They must not use `WHATSAPP_BUSINESS_ACCOUNT_ID`.
 
+Template synchronization uses the WABA endpoint:
+
+```text
+/{WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates
+```
+
+It must not use `WHATSAPP_PHONE_NUMBER_ID`.
+
 If a send call returns:
 
 ```text
 Unsupported post request. Object with ID '...' does not exist...
 ```
 
-check that `WHATSAPP_PHONE_NUMBER_ID` is the Phone Number ID from API Setup, the token belongs to the same Business/App, and the token has the required WhatsApp permissions. The app logs Meta error code/message when `DEBUG=true`; it never logs `WHATSAPP_TOKEN`.
+check that `WHATSAPP_PHONE_NUMBER_ID` is the Phone Number ID from API Setup, the token belongs to the same Business/App, and the token has the required WhatsApp permissions. The app logs Meta error code/message when `DEBUG=true`; it never logs raw access tokens.
 
 ## Runtime Processes
 
@@ -149,9 +186,10 @@ Run these as separate processes in development and production:
 ```bash
 npm run dev
 npm run worker:whatsapp
+npm run worker:webhook
 ```
 
-The API server handles HTTP, webhooks, auth, CRM data, Socket.IO notifications, and queueing outbound WhatsApp work. The worker consumes Redis jobs, sends messages through WhatsApp Cloud API, and updates message status in PostgreSQL.
+The API server handles HTTP, webhook verification/audit capture, auth, CRM data, Socket.IO notifications, and queueing outbound/inbound work. The outbound worker consumes message-send jobs, sends through WhatsApp Cloud API, and updates message status in PostgreSQL. The webhook worker consumes audited webhook events and dispatches inbound/status/template handlers outside the HTTP request path.
 
 ## Response Format
 
@@ -287,6 +325,9 @@ WhatsApp:
 
 - `GET /api/whatsapp/webhook`
 - `POST /api/whatsapp/webhook`
+- `GET /api/whatsapp/templates` returns synced templates, approved by default
+- `POST /api/whatsapp/templates/sync` syncs Meta templates, admin only
+- `POST /api/whatsapp/messages/template` sends one approved template to a customer
 - `POST /api/whatsapp/templates/bulk`
 
 Bulk campaigns automatically exclude customers where `contactBlocked=true` and send to each eligible customer's primary phone.

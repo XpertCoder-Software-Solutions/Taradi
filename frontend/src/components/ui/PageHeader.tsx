@@ -13,7 +13,7 @@ export function PageHeader({ title, description, action, meta }: {
         <h1 className="text-2xl font-black tracking-normal text-ink-900 sm:text-3xl">{title}</h1>
         {description ? <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-500">{description}</p> : null}
       </div>
-      {action ? <div className="flex flex-wrap items-center gap-2">{action}</div> : null}
+      {action ? <div className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1">{action}</div> : null}
     </div>
   );
 }

@@ -5,13 +5,17 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "nodemon src/server.js",
+    "test": "node --test",
     "start": "node src/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
     "prisma:studio": "prisma studio",
-    "worker:whatsapp": "node src/workers/whatsapp.worker.js"
+    "prisma:report-debt-backfill": "node prisma/report-customer-debt-backfill.js",
+    "worker:whatsapp": "node src/workers/whatsapp.worker.js",
+    "worker:campaigns": "node src/workers/campaign-prepare.worker.js",
+    "worker:webhook": "node src/workers/whatsapp-webhook.worker.js"
   },
   "keywords": [
     "taradi",
@@ -23,6 +27,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@prisma/client": "^6.0.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.79.2",
@@ -41,6 +46,7 @@
     "socket.io": "^4.8.1",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

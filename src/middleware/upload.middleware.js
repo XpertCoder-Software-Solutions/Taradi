@@ -4,6 +4,12 @@ const ApiError = require("../utils/apiError");
 const { allowedMimeTypes, maxUploadBytes } = require("../config/media");
 
 const csvMaxUploadBytes = 5 * 1024 * 1024;
+const excelMaxUploadBytes = 10 * 1024 * 1024;
+const customerImportMaxUploadBytes = 10 * 1024 * 1024;
+
+function normalizeMimeType(mimeType) {
+  return String(mimeType || "").split(";")[0].trim().toLowerCase();
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -12,7 +18,7 @@ const upload = multer({
     files: 1
   },
   fileFilter(req, file, cb) {
-    if (!allowedMimeTypes.has(file.mimetype)) {
+    if (!allowedMimeTypes.has(normalizeMimeType(file.mimetype))) {
       return cb(new ApiError(400, "Unsupported media type", [
         { mimeType: file.mimetype }
       ]));
@@ -77,7 +83,85 @@ function singleCsvUpload(req, res, next) {
   csvUpload.single("file")(req, res, (error) => handleCsvUploadError(error, req, res, next));
 }
 
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: excelMaxUploadBytes,
+    files: 1
+  },
+  fileFilter(req, file, cb) {
+    const extension = path.extname(file.originalname || "").toLowerCase();
+    const allowedExtensions = new Set([".xlsx", ".xls"]);
+
+    if (!allowedExtensions.has(extension)) {
+      return cb(new ApiError(400, "يجب رفع ملف Excel فقط", [
+        { fileName: file.originalname }
+      ]));
+    }
+
+    return cb(null, true);
+  }
+});
+
+function handleExcelUploadError(error, req, res, next) {
+  if (!error) {
+    return next();
+  }
+
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return next(new ApiError(400, "ملف Excel أكبر من الحجم المسموح", [
+      { maxBytes: excelMaxUploadBytes }
+    ]));
+  }
+
+  return next(error);
+}
+
+function singleExcelUpload(req, res, next) {
+  excelUpload.single("file")(req, res, (error) => handleExcelUploadError(error, req, res, next));
+}
+
+const customerImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: customerImportMaxUploadBytes,
+    files: 1
+  },
+  fileFilter(req, file, cb) {
+    const extension = path.extname(file.originalname || "").toLowerCase();
+    const allowedExtensions = new Set([".csv", ".xlsx", ".xls"]);
+
+    if (!allowedExtensions.has(extension)) {
+      return cb(new ApiError(400, "يجب رفع ملف Excel أو CSV فقط", [
+        { fileName: file.originalname }
+      ]));
+    }
+
+    return cb(null, true);
+  }
+});
+
+function handleCustomerImportUploadError(error, req, res, next) {
+  if (!error) {
+    return next();
+  }
+
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return next(new ApiError(400, "ملف العملاء أكبر من الحجم المسموح", [
+      { maxBytes: customerImportMaxUploadBytes }
+    ]));
+  }
+
+  return next(error);
+}
+
+function singleCustomerImportUpload(req, res, next) {
+  customerImportUpload.single("file")(req, res, (error) => handleCustomerImportUploadError(error, req, res, next));
+}
+
 module.exports = {
   singleMediaUpload,
-  singleCsvUpload
+  singleCsvUpload,
+  singleExcelUpload,
+  singleCustomerImportUpload
 };

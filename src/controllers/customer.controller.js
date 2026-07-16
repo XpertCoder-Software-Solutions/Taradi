@@ -41,6 +41,7 @@ const createCustomerSchema = z.object({
   nationalId: z.string().trim().min(1, "رقم الهوية مطلوب"),
   accountNumber: z.string().trim().min(1, "رقم الحساب مطلوب"),
   projectName: z.string().trim().min(1, "الجهة مطلوبة"),
+  projectNameRaw: z.string().trim().nullable().optional(),
   debtAmount: debtAmountSchema,
   serviceNumber: z.string().trim().min(1, "رقم الخدمة مطلوب"),
   serviceActivationDate: optionalDateSchema,
@@ -57,6 +58,8 @@ const createCustomerSchema = z.object({
   notes: z.string().nullable().optional(),
   assignedEmployeeId: z.string().uuid().nullable().optional(),
   assignedToId: z.string().uuid().nullable().optional(),
+  assignmentReason: z.string().trim().nullable().optional(),
+  reassignmentReason: z.string().trim().nullable().optional(),
   phone: z.string().min(1).optional(),
   name: z.string().trim().min(1).nullable().optional(),
   tags: z.array(z.string().trim().min(1)).optional()
@@ -67,6 +70,7 @@ const updateCustomerSchema = z.object({
   nationalId: z.string().trim().min(1).nullable().optional(),
   accountNumber: z.string().trim().min(1).optional(),
   projectName: z.string().trim().min(1).optional(),
+  projectNameRaw: z.string().trim().nullable().optional(),
   debtAmount: debtAmountSchema.optional(),
   serviceNumber: z.string().trim().min(1).optional(),
   serviceActivationDate: optionalDateSchema,
@@ -92,7 +96,8 @@ const updateCustomerSchema = z.object({
 });
 
 const assignCustomerSchema = z.object({
-  employeeId: z.string().uuid().nullable()
+  employeeId: z.string().uuid().nullable(),
+  reason: z.string().trim().nullable().optional()
 });
 
 const updateCollectionStatusSchema = z.object({
@@ -122,6 +127,12 @@ const importCustomersCsv = asyncHandler(async (req, res) => {
   res.success(result);
 });
 
+const importCustomersExcel = asyncHandler(async (req, res) => {
+  const result = await customerImportService.importCustomersFromFile(req.file, req.user);
+
+  res.success(result);
+});
+
 const getCustomer = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
   const customer = await customerService.getCustomerForUser(id, req.user);
@@ -132,17 +143,28 @@ const getCustomer = asyncHandler(async (req, res) => {
 const updateCustomer = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
   const data = parse(updateCustomerSchema, req.body);
-  const customer = await customerService.updateCustomer(id, req.user, data);
+  const result = await customerService.updateCustomer(id, req.user, data);
 
-  res.success({ customer });
+  if (result && result.customer && result.reassignment) {
+    res.success({
+      customer: result.customer,
+      ...result.reassignment
+    });
+    return;
+  }
+
+  res.success({ customer: result });
 });
 
 const assignCustomer = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
-  const { employeeId } = parse(assignCustomerSchema, req.body);
-  const customer = await customerService.assignCustomer(id, req.user, employeeId);
+  const { employeeId, reason } = parse(assignCustomerSchema, req.body);
+  const result = await customerService.assignCustomer(id, req.user, employeeId, { reason });
 
-  res.success({ customer });
+  res.success({
+    customer: result.customer,
+    ...result.reassignment
+  });
 });
 
 const updateCollectionStatus = asyncHandler(async (req, res) => {
@@ -164,6 +186,7 @@ module.exports = {
   listCustomers,
   createCustomer,
   importCustomersCsv,
+  importCustomersExcel,
   getCustomer,
   updateCustomer,
   updateCollectionStatus,

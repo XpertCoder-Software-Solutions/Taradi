@@ -215,7 +215,7 @@ async function updateAuditEvent(auditEventId, status, errorMessage) {
   });
 }
 
-async function dispatchWebhook(payload, auditEventId) {
+async function dispatchWebhook(payload, auditEventId, options = {}) {
   const summary = createEmptySummary();
   const changes = getWebhookChanges(payload);
 
@@ -252,6 +252,10 @@ async function dispatchWebhook(payload, auditEventId) {
     await updateAuditEvent(auditEventId, "FAILED", error.message);
 
     logger.error({ err: error, auditEventId }, "Webhook dispatch failed");
+
+    if (options.throwOnError) {
+      throw error;
+    }
 
     return {
       ...summary,

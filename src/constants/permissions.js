@@ -1,6 +1,7 @@
 const PERMISSION_CATEGORIES = [
   { key: "chats", nameAr: "المحادثات" },
   { key: "customers", nameAr: "العملاء" },
+  { key: "debts", nameAr: "المديونيات" },
   { key: "employees", nameAr: "الموظفون" },
   { key: "campaigns", nameAr: "الحملات" },
   { key: "templates", nameAr: "القوالب" },
@@ -9,6 +10,11 @@ const PERMISSION_CATEGORIES = [
 ];
 
 const PERMISSIONS = [
+  { key: "debts.view", nameAr: "عرض المديونيات", descriptionAr: "يسمح بعرض مديونيات العملاء ضمن نطاق الوصول.", category: "debts" },
+  { key: "debts.create", nameAr: "إضافة مديونية", descriptionAr: "يسمح بإضافة مديونية للعميل.", category: "debts" },
+  { key: "debts.edit", nameAr: "تعديل المديونية", descriptionAr: "يسمح بتعديل مديونية العميل.", category: "debts" },
+  { key: "debts.archive", nameAr: "أرشفة المديونية", descriptionAr: "يسمح بإغلاق المديونية مع حفظ تاريخها.", category: "debts" },
+  { key: "campaigns.select_debts", nameAr: "اختيار مديونيات الحملات", descriptionAr: "يسمح باختيار مديونيات محددة ضمن الحملات.", category: "campaigns" },
   {
     key: "chats.view_assigned",
     nameAr: "عرض المحادثات المسندة",
@@ -83,8 +89,8 @@ const PERMISSIONS = [
   },
   {
     key: "customers.import_csv",
-    nameAr: "استيراد CSV",
-    descriptionAr: "يسمح باستيراد العملاء من ملف CSV.",
+    nameAr: "استيراد العملاء",
+    descriptionAr: "يسمح باستيراد العملاء من ملف Excel أو CSV.",
     category: "customers"
   },
   {
@@ -148,9 +154,15 @@ const PERMISSIONS = [
     category: "templates"
   },
   {
+    key: "templates.send",
+    nameAr: "إرسال قالب",
+    descriptionAr: "يسمح بإرسال قوالب واتساب المعتمدة للعملاء.",
+    category: "templates"
+  },
+  {
     key: "templates.manage",
     nameAr: "إدارة القوالب",
-    descriptionAr: "يسمح بإدارة إعدادات القوالب عند توفر واجهتها.",
+    descriptionAr: "يسمح بمزامنة وإدارة قوالب واتساب.",
     category: "templates"
   },
   {
@@ -185,8 +197,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
     "customers.create",
     "customers.edit",
     "customers.assign",
+    "debts.view", "debts.create", "debts.edit", "debts.archive", "campaigns.select_debts",
     "employees.view_team",
+    "employees.create",
     "campaigns.view",
+    "templates.view",
+    "templates.send",
     "reports.view"
   ],
   EMPLOYEE: [
@@ -194,7 +210,10 @@ const DEFAULT_ROLE_PERMISSIONS = {
     "chats.send_message",
     "chats.send_media",
     "chats.mark_read",
-    "customers.view_assigned"
+    "customers.view_assigned",
+    "debts.view",
+    "templates.view",
+    "templates.send"
   ]
 };
 

@@ -306,22 +306,35 @@ async function getPresenceForUserIds(userIds) {
   });
   const dbLastSeenByUser = new Map(users.map((user) => [user.id, user.lastSeenAt]));
   const lastSeen = {};
+  const onlineUserIds = getOnlineUserIds(uniqueUserIds);
+  const onlineUserIdSet = new Set(onlineUserIds);
+  const presenceUsers = [];
 
   for (const userId of uniqueUserIds) {
     const value = lastSeenByUser.get(userId) || dbLastSeenByUser.get(userId) || null;
-    lastSeen[userId] = value ? value.toISOString() : null;
+    const lastSeenAt = value ? value.toISOString() : null;
+    lastSeen[userId] = lastSeenAt;
+    presenceUsers.push({
+      userId,
+      isOnline: onlineUserIdSet.has(userId),
+      lastSeenAt
+    });
   }
 
   return {
-    onlineUserIds: getOnlineUserIds(uniqueUserIds),
+    onlineUserIds,
+    users: presenceUsers,
     lastSeen
   };
 }
 
 module.exports = {
+  markSocketConnected: markSocketOnline,
   markSocketOnline,
   markSocketDisconnected,
+  forceLogout: handleSocketLogout,
   handleSocketLogout,
+  getPresenceForUsers: getPresenceForUserIds,
   getPresenceForUserIds,
   getOnlineUserIds,
   isUserOnline

@@ -16,6 +16,7 @@ export ADMIN_PASSWORD="123456789"
 export RUN_ID="$(date +%s)"
 export SUPERVISOR_CODE="SUP$RUN_ID"
 export EMPLOYEE_CODE="EMP$RUN_ID"
+export EMPLOYEE_NAME="Employee One"
 export EMPLOYEE_PASSWORD="Employee123456!"
 export CUSTOMER_PHONE="20100$(date +%s)"
 ```
@@ -84,7 +85,7 @@ export EMPLOYEE_ID=$(
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-      \"employeeName\":\"Employee One\",
+      \"employeeName\":\"$EMPLOYEE_NAME\",
       \"employeeCode\":\"$EMPLOYEE_CODE\",
       \"role\":\"EMPLOYEE\",
       \"supervisorId\":\"$SUPERVISOR_ID\",
@@ -124,28 +125,32 @@ export CUSTOMER_ID=$(
 echo "$CUSTOMER_ID"
 ```
 
-## Import Customers From CSV
+## Import Customers From Excel Or CSV
 
 Sample CSV content:
 
 ```csv
-اسم العميل,رقم الهوية,رقم الحساب,الجهة,مبلغ المديونية,رقم الخدمة,حالة الفاتورة,حالة التحصيل,سنة المديونية,رقم الهاتف الرئيسي,كود الموظف
-Ahmed Ali,123456789,ACC-1001,STC,2500,SVC-1001,غير مدفوعة,مديونية قائمة,2021,201000000000,EMP001
+الجهة,اسم العميل,رقم الهوية,الرقم الرئيسي,رقم الحساب,مبلغ المديونية,المحصل,اسم المستخدم,المتابعة,رقم الخدمة,تأريخ تفعيل الخدمة,تاريخ إنتهاء الخدمة,حالة الفاتورة,تأريخ سنة المديونية
+STC,Ahmed Ali,123456789,0501935233,ACC-1001,2500,EMPLOYEE NAME,portal-user-1,متابعة خلال أسبوع,SVC-1001,15/01/2021,20/03/2022,Closed - N,2021
 ```
 
-Arabic headers are also supported:
+Supported column aliases include:
 
-```csv
-اسم العميل,رقم الهوية,رقم الحساب,الجهة,مبلغ المديونية,رقم الخدمة,حالة الفاتورة,حالة التحصيل,سنة المديونية,رقم الهاتف الرئيسي,كود الموظف
-Ahmed Ali,123456789,ACC-1001,STC,2500,SVC-1001,غير مدفوعة,مديونية قائمة,2021,201000000000,EMP001
-```
+- `مبلغ الميدونية` or `مبلغ المديونية`
+- `رقم الخدمة` or `MSISDN`
+- `تأريخ تفعيل الخدمة` or `CREATED_DATE`
+- `تاريخ إنتهاء الخدمة` or `STATUS_DATE`
+- `حالة الفاتورة` or `SERVICE_STATUS`
+- `الرقم الرئيسي` is normalized from `0501935233` or `+966501935233` to `966501935233`
+- `الجهة` is normalized: `موبايلي`/`mobily` -> `Mobily`, `اس تي سي`/`stc` -> `STC`, `زين`/`zain` -> `Zain`
+- the original `الجهة` value is kept in `projectNameRaw` for auditing
 
 Create a local sample and import it as admin:
 
 ```bash
-printf '\357\273\277اسم العميل,رقم الهوية,رقم الحساب,الجهة,مبلغ المديونية,رقم الخدمة,حالة الفاتورة,حالة التحصيل,سنة المديونية,رقم الهاتف الرئيسي,كود الموظف\nAhmed Ali,123456789,ACC-1001,STC,2500,SVC-1001,غير مدفوعة,مديونية قائمة,2021,201000000000,%s\n' "$EMPLOYEE_CODE" > /tmp/taradi-customers.csv
+printf '\357\273\277الجهة,اسم العميل,رقم الهوية,الرقم الرئيسي,رقم الحساب,مبلغ المديونية,المحصل,اسم المستخدم,المتابعة,رقم الخدمة,تأريخ تفعيل الخدمة,تاريخ إنتهاء الخدمة,حالة الفاتورة,تأريخ سنة المديونية\nSTC,Ahmed Ali,123456789,0501935233,ACC-1001,2500,%s,portal-user-1,متابعة خلال أسبوع,SVC-1001,15/01/2021,20/03/2022,Closed - N,2021\n' "$EMPLOYEE_NAME" > /tmp/taradi-customers.csv
 
-curl -s -X POST "$BASE_URL/api/customers/import-csv" \
+curl -s -X POST "$BASE_URL/api/customers/import-excel" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "file=@/tmp/taradi-customers.csv;type=text/csv" \
 | jq
@@ -162,15 +167,19 @@ Expected response shape:
     "updated": 0,
     "skipped": 0,
     "assigned": 1,
+    "unassigned": 0,
+    "warnings": [],
     "errors": []
   }
 }
 ```
 
-After the Employee Login section below, employees must not be able to import CSV files:
+If the `المحصل` name is not found, the row is still imported as unassigned and the response includes a warning.
+
+After the Employee Login section below, employees must not be able to import customer files:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/customers/import-csv" \
+curl -s -X POST "$BASE_URL/api/customers/import-excel" \
   -H "Authorization: Bearer $EMPLOYEE_TOKEN" \
   -F "file=@/tmp/taradi-customers.csv;type=text/csv" \
 | jq
@@ -756,6 +765,43 @@ curl -s -X POST "$BASE_URL/api/chats/$CUSTOMER_ID/messages" \
   -d '{
     "text":"Hello from Taradi CRM"
   }' \
+| jq
+```
+
+## Quick WhatsApp Send
+
+This sends a WhatsApp text by phone without manually creating a customer first. The API normalizes the phone, searches primary and secondary `CustomerPhone` records, reuses an existing customer/conversation when found, and creates a lightweight customer with `source=QUICK_SEND` only when no customer exists.
+
+Permissions:
+- Admin can quick send to any number and optionally pass `assignedToId`.
+- Supervisor can assign to himself or employees under him.
+- Employee is always assigned to himself and is blocked if the phone belongs to another employee.
+
+Quick Send queues a normal WhatsApp `type=text` message immediately. It does not require or force a template. If Meta rejects the message because the customer did not start a conversation in the last 24 hours, the worker marks the message `FAILED` with:
+`فشل الإرسال: لا يمكن إرسال رسالة نصية مباشرة لأن العميل لم يبدأ محادثة خلال آخر 24 ساعة.`
+
+```bash
+curl -s -X POST "$BASE_URL/api/chats/quick-send" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone":"201009999111",
+    "message":"نص الرسالة"
+  }' \
+| jq
+```
+
+Optional assignment for Admin/Supervisor:
+
+```bash
+curl -s -X POST "$BASE_URL/api/chats/quick-send" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"phone\":\"201009999111\",
+    \"message\":\"نص الرسالة\",
+    \"assignedToId\":\"$EMPLOYEE_ID\"
+  }" \
 | jq
 ```
 

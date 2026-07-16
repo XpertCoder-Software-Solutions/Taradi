@@ -1,22 +1,35 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { whatsappUploadDir } = require("../config/media");
+const { whatsappUploadDir, whatsappInboundUploadDir } = require("../config/media");
 
 const extensionByMimeType = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
+  "image/gif": ".gif",
+  "video/mp4": ".mp4",
+  "video/3gpp": ".3gp",
+  "audio/aac": ".aac",
+  "audio/amr": ".amr",
   "audio/ogg": ".ogg",
+  "audio/opus": ".opus",
   "audio/mpeg": ".mp3",
   "audio/mp4": ".m4a",
+  "audio/webm": ".webm",
+  "audio/wav": ".wav",
   "application/pdf": ".pdf",
   "application/msword": ".doc",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx"
 };
 
 function ensureUploadDirectory() {
   fs.mkdirSync(whatsappUploadDir, { recursive: true });
+  fs.mkdirSync(whatsappInboundUploadDir, { recursive: true });
 }
 
 function sanitizeFileName(fileName) {
@@ -43,8 +56,22 @@ function createStoredFileName({ originalName, mimeType }) {
   return `${Date.now()}-${crypto.randomUUID()}${ext}`;
 }
 
-function mediaUrlForFileName(fileName) {
-  return `/uploads/whatsapp/${fileName}`;
+function getUploadDirectory(subDir) {
+  if (!subDir) {
+    return whatsappUploadDir;
+  }
+
+  const safeSubDir = path.basename(String(subDir));
+
+  if (safeSubDir !== subDir) {
+    throw new Error("Invalid upload subdirectory");
+  }
+
+  return path.join(whatsappUploadDir, safeSubDir);
+}
+
+function mediaUrlForFileName(fileName, subDir) {
+  return `/uploads/whatsapp/${subDir ? `${subDir}/` : ""}${fileName}`;
 }
 
 function pathFromMediaUrl(mediaUrl) {
@@ -58,20 +85,50 @@ function pathFromMediaUrl(mediaUrl) {
     return null;
   }
 
-  return path.join(whatsappUploadDir, path.basename(mediaUrl));
+  const rawRelative = mediaUrl.slice(prefix.length).split("?")[0].split("#")[0];
+  let relativePath = rawRelative;
+
+  try {
+    relativePath = decodeURIComponent(rawRelative);
+  } catch (error) {
+    relativePath = rawRelative;
+  }
+
+  const normalizedRelative = path.normalize(relativePath);
+
+  if (
+    path.isAbsolute(normalizedRelative) ||
+    normalizedRelative === "." ||
+    normalizedRelative.startsWith("..")
+  ) {
+    return null;
+  }
+
+  const root = path.resolve(whatsappUploadDir);
+  const resolved = path.resolve(root, normalizedRelative);
+
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    return null;
+  }
+
+  return resolved;
 }
 
-async function saveMediaBuffer(buffer, { originalName, mimeType }) {
+async function saveMediaBuffer(buffer, { originalName, mimeType, subDir = null }) {
   ensureUploadDirectory();
 
   const fileName = createStoredFileName({ originalName, mimeType });
-  const localPath = path.join(whatsappUploadDir, fileName);
+  const uploadDirectory = getUploadDirectory(subDir);
+
+  await fs.promises.mkdir(uploadDirectory, { recursive: true });
+
+  const localPath = path.join(uploadDirectory, fileName);
 
   await fs.promises.writeFile(localPath, buffer, { flag: "wx" });
 
   return {
     localPath,
-    mediaUrl: mediaUrlForFileName(fileName),
+    mediaUrl: mediaUrlForFileName(fileName, subDir),
     storedFileName: fileName,
     originalFileName: sanitizeFileName(originalName)
   };

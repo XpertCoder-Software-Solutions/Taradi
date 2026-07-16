@@ -67,7 +67,7 @@ export function OverviewPage() {
                       <div className="min-w-0">
                         <p className="truncate font-bold text-ink-900">{customerName}</p>
                         <p className="mt-1 truncate text-sm text-ink-500">
-                          {conversation.lastMessage?.body || conversation.lastMessage?.caption || conversation.lastMessage?.fileName || (conversation.lastMessage ? messageTypeLabel[conversation.lastMessage.type] : "لا توجد رسائل حتى الآن")}
+                          {conversation.lastMessage?.body || conversation.lastMessage?.content || conversation.lastMessage?.caption || conversation.lastMessage?.fileName || (conversation.lastMessage ? messageTypeLabel[conversation.lastMessage.type] : "لا توجد رسائل حتى الآن")}
                         </p>
                       </div>
                     </div>

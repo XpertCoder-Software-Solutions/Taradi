@@ -15,6 +15,8 @@ function sanitizeUser(user) {
     id: user.id,
     email: user.email || null,
     employeeCode: user.employeeCode || null,
+    phone: user.phone || null,
+    mustChangePassword: Boolean(user.mustChangePassword),
     name: user.name,
     fullName: user.name,
     role: user.role,

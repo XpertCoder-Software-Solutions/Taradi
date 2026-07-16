@@ -1,18 +1,17 @@
 import { api, unwrap } from "../lib/api";
+import type { CustomerFilters } from "./customers.api";
+import type { WhatsappTemplate, WhatsappTemplateMapping, WhatsappTemplateVariable } from "../types/api";
 
 export interface CreateCampaignPayload {
-  customerIds: string[];
-  templateName: string;
-  languageCode: string;
-  components?: unknown[];
-}
-
-export interface CampaignResult {
-  customerId: string;
-  messageId: string;
-  jobId?: string;
-  status: "QUEUED" | "FAILED";
-  error?: string;
+  templateId: string;
+  selectionMode: "explicit" | "all_matching";
+  customerIds?: string[];
+  recipients?: Array<{ customerId: string; debtId: string }>;
+  debtIds?: string[];
+  excludedCustomerIds?: string[];
+  excludedDebtIds?: string[];
+  filters?: CustomerFilters;
+  idempotencyKey?: string;
 }
 
 export interface CampaignExcludedCustomer {
@@ -21,17 +20,96 @@ export interface CampaignExcludedCustomer {
   reason: string;
 }
 
-export interface CampaignResponse {
-  totalSelected?: number;
-  eligibleRecipients?: number;
-  excludedBlockedCustomers?: number;
-  excludedCustomers?: CampaignExcludedCustomer[];
-  total: number;
+export type CampaignStatus =
+  | "DRAFT"
+  | "PREPARING"
+  | "READY"
+  | "QUEUED"
+  | "RUNNING"
+  | "PAUSED"
+  | "COMPLETED"
+  | "COMPLETED_WITH_ERRORS"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface CampaignProgress {
+  campaignId: string;
+  id: string;
+  status: CampaignStatus;
+  templateId?: string | null;
+  templateName: string;
+  languageCode: string;
+  selectionMode: "explicit" | "all_matching" | string;
+  recipientCount: number;
+  selected: number;
+  eligible: number;
   queued: number;
+  sent: number;
+  delivered: number;
+  read: number;
   failed: number;
-  results: CampaignResult[];
+  skipped: number;
+  pending: number;
+  progressPercentage: number;
+  error?: string | null;
+  message?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string | null;
+  preparedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface CampaignPreviewCustomer {
+  customerId: string;
+  debtId?: string;
+  customerName: string;
+  phone: string;
+  eligible: boolean;
+  warnings: string[];
+  resolvedVariables: Array<{
+    variableKey: string;
+    token: string;
+    placeholderNumber: number;
+    componentType: string;
+    buttonIndex?: number | null;
+    fieldKey: string;
+    transformer?: string | null;
+    fallbackValue?: string | null;
+    value: string;
+  }>;
+  renderedTemplate: string;
+}
+
+export interface CampaignPreviewResponse {
+  template: Pick<WhatsappTemplate, "id" | "name" | "language" | "category" | "status">;
+  selectionMode: "explicit" | "all_matching";
+  totalSelected: number;
+  eligibleRecipients: number;
+  skippedCustomers: number;
+  invalidPhoneNumbers: number;
+  estimatedSendCount: number;
+  excludedCustomers?: CampaignExcludedCustomer[];
+  mapping: {
+    isComplete: boolean;
+    message?: string | null;
+    variables: WhatsappTemplateVariable[];
+    mappings: WhatsappTemplateMapping[];
+    missingVariables: WhatsappTemplateVariable[];
+  };
+  previews: CampaignPreviewCustomer[];
 }
 
 export async function createBulkCampaign(payload: CreateCampaignPayload) {
-  return unwrap<CampaignResponse>(await api.post("/api/whatsapp/templates/bulk", payload));
+  const headers = payload.idempotencyKey ? { "Idempotency-Key": payload.idempotencyKey } : undefined;
+
+  return unwrap<CampaignProgress>(await api.post("/api/whatsapp/templates/bulk", payload, { headers }));
+}
+
+export async function previewBulkCampaign(payload: CreateCampaignPayload & { limit?: number }, signal?: AbortSignal) {
+  return unwrap<CampaignPreviewResponse>(await api.post("/api/whatsapp/templates/bulk/preview", payload, { signal }));
+}
+
+export async function getCampaignProgress(campaignId: string) {
+  return unwrap<CampaignProgress>(await api.get(`/api/whatsapp/templates/bulk/${campaignId}`));
 }

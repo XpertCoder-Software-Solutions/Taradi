@@ -6,6 +6,8 @@ import { ChatHeader } from "./ChatHeader";
 import { MessageBubble } from "./MessageBubble";
 import { MessageComposer } from "./MessageComposer";
 
+type ComposerMediaType = "image" | "audio" | "voice" | "video" | "document";
+
 export function ChatWindow({
   conversation,
   messages,
@@ -18,10 +20,13 @@ export function ChatWindow({
   file,
   sendingText,
   sendingMedia,
+  sendingVoice,
+  sendingTemplate,
   statusPending,
   priorityPending,
   canSendMessage,
   canSendMedia,
+  canSendTemplate,
   canChangeStatus,
   canCloseConversation,
   canChangePriority,
@@ -32,6 +37,8 @@ export function ChatWindow({
   onClearFile,
   onSendText,
   onSendMedia,
+  onSendVoice,
+  onOpenTemplateModal,
   onStatusChange,
   onPriorityChange,
   onRefresh
@@ -42,25 +49,30 @@ export function ChatWindow({
   loadingMessages: boolean;
   messagesError: unknown;
   text: string;
-  mediaType: "image" | "audio" | "voice" | "document";
+  mediaType: ComposerMediaType;
   caption: string;
   file: File | null;
   sendingText: boolean;
   sendingMedia: boolean;
+  sendingVoice: boolean;
+  sendingTemplate: boolean;
   statusPending: boolean;
   priorityPending: boolean;
   canSendMessage: boolean;
   canSendMedia: boolean;
+  canSendTemplate: boolean;
   canChangeStatus: boolean;
   canCloseConversation: boolean;
   canChangePriority: boolean;
   onTextChange: (value: string) => void;
-  onMediaTypeChange: (value: "image" | "audio" | "voice" | "document") => void;
+  onMediaTypeChange: (value: ComposerMediaType) => void;
   onCaptionChange: (value: string) => void;
   onFileChange: (file: File | null) => void;
   onClearFile: () => void;
   onSendText: () => void;
   onSendMedia: () => void;
+  onSendVoice: (file: File) => void;
+  onOpenTemplateModal: () => void;
   onStatusChange: (status: ConversationStatus) => void;
   onPriorityChange: (priority: ConversationPriority) => void;
   onRefresh: () => void;
@@ -126,8 +138,11 @@ export function ChatWindow({
           file={file}
           sendingText={sendingText}
           sendingMedia={sendingMedia}
+          sendingVoice={sendingVoice}
+          sendingTemplate={sendingTemplate}
           canSendMessage={canSendMessage}
           canSendMedia={canSendMedia}
+          canSendTemplate={canSendTemplate}
           onTextChange={onTextChange}
           onMediaTypeChange={onMediaTypeChange}
           onCaptionChange={onCaptionChange}
@@ -135,6 +150,8 @@ export function ChatWindow({
           onClearFile={onClearFile}
           onSendText={onSendText}
           onSendMedia={onSendMedia}
+          onSendVoice={onSendVoice}
+          onOpenTemplateModal={onOpenTemplateModal}
         />
       ) : null}
     </section>

@@ -11,6 +11,7 @@ const outboundTypeMap = {
   image: "IMAGE",
   audio: "AUDIO",
   voice: "VOICE",
+  video: "VIDEO",
   document: "DOCUMENT"
 };
 
@@ -19,8 +20,40 @@ function normalizeOutboundMediaType(type) {
   return outboundTypeMap[normalized] || null;
 }
 
+function normalizeMimeType(mimeType) {
+  return String(mimeType || "").split(";")[0].trim().toLowerCase() || null;
+}
+
+function inferOutboundMediaType(file) {
+  const mimeType = normalizeMimeType(file && file.mimetype);
+
+  if (!mimeType) {
+    return null;
+  }
+
+  if (mimeType.startsWith("image/")) {
+    return "IMAGE";
+  }
+
+  if (mimeType.startsWith("video/")) {
+    return "VIDEO";
+  }
+
+  if (mimeType.startsWith("audio/")) {
+    return "AUDIO";
+  }
+
+  if (typeMimePrefixes.document.some((rule) => mimeType === rule)) {
+    return "DOCUMENT";
+  }
+
+  return null;
+}
+
 function isMimeAllowedForType(mediaType, mimeType) {
-  if (!mediaType || !mimeType || !allowedMimeTypes.has(mimeType)) {
+  const normalizedMimeType = normalizeMimeType(mimeType);
+
+  if (!mediaType || !normalizedMimeType || !allowedMimeTypes.has(normalizedMimeType)) {
     return false;
   }
 
@@ -28,7 +61,7 @@ function isMimeAllowedForType(mediaType, mimeType) {
   const rules = typeMimePrefixes[key] || [];
 
   return rules.some((rule) => (
-    rule.endsWith("/") ? mimeType.startsWith(rule) : mimeType === rule
+    rule.endsWith("/") ? normalizedMimeType.startsWith(rule) : normalizedMimeType === rule
   ));
 }
 
@@ -37,7 +70,7 @@ function validateUploadedMedia({ mediaType, file }) {
     throw new ApiError(400, "Media file is required");
   }
 
-  const messageType = normalizeOutboundMediaType(mediaType);
+  const messageType = normalizeOutboundMediaType(mediaType) || inferOutboundMediaType(file);
 
   if (!messageType) {
     throw new ApiError(400, "Invalid media type", [
@@ -45,10 +78,10 @@ function validateUploadedMedia({ mediaType, file }) {
     ]);
   }
 
-  if (!isMimeAllowedForType(mediaType, file.mimetype)) {
+  if (!isMimeAllowedForType(messageType, file.mimetype)) {
     throw new ApiError(400, "File MIME type is not allowed for the requested media type", [
       {
-        type: mediaType,
+        type: mediaType || messageType.toLowerCase(),
         mimeType: file.mimetype
       }
     ]);
@@ -61,7 +94,7 @@ async function saveUploadedMedia({ mediaType, file }) {
   const messageType = validateUploadedMedia({ mediaType, file });
   const saved = await saveMediaBuffer(file.buffer, {
     originalName: file.originalname,
-    mimeType: file.mimetype
+    mimeType: normalizeMimeType(file.mimetype)
   });
 
   return {
@@ -69,8 +102,41 @@ async function saveUploadedMedia({ mediaType, file }) {
     mediaUrl: saved.mediaUrl,
     localPath: saved.localPath,
     fileName: sanitizeFileName(file.originalname),
-    mimeType: file.mimetype,
+    mimeType: normalizeMimeType(file.mimetype),
     fileSize: file.size
+  };
+}
+
+function toPositiveInt(value) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+}
+
+function getInboundFileSize(payload) {
+  return toPositiveInt(
+    payload && (payload.file_size || payload.fileSize || payload.size)
+  );
+}
+
+function getInboundDuration(payload) {
+  return toPositiveInt(payload && payload.duration);
+}
+
+function buildInboundMedia(messageType, payload, overrides = {}) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  return {
+    messageType,
+    mediaId: payload.id || null,
+    mimeType: normalizeMimeType(payload.mime_type || payload.mimeType),
+    caption: payload.caption || null,
+    fileName: payload.filename ? sanitizeFileName(payload.filename) : null,
+    fileSize: getInboundFileSize(payload),
+    duration: getInboundDuration(payload),
+    ...overrides
   };
 }
 
@@ -80,39 +146,40 @@ function extractInboundMedia(message) {
   }
 
   if (message.image) {
-    return {
-      messageType: "IMAGE",
-      mediaId: message.image.id || null,
-      mimeType: message.image.mime_type || null,
-      caption: message.image.caption || null,
-      fileName: null,
-      fileSize: null,
-      duration: null
-    };
+    return buildInboundMedia("IMAGE", message.image, {
+      fileName: null
+    });
   }
 
   if (message.audio) {
-    return {
-      messageType: message.audio.voice ? "VOICE" : "AUDIO",
-      mediaId: message.audio.id || null,
-      mimeType: message.audio.mime_type || null,
+    return buildInboundMedia(message.audio.voice ? "VOICE" : "AUDIO", message.audio, {
       caption: null,
-      fileName: null,
-      fileSize: null,
-      duration: null
-    };
+      fileName: null
+    });
+  }
+
+  if (message.voice) {
+    return buildInboundMedia("VOICE", message.voice, {
+      caption: null,
+      fileName: null
+    });
+  }
+
+  if (message.video) {
+    return buildInboundMedia("VIDEO", message.video, {
+      fileName: null
+    });
   }
 
   if (message.document) {
-    return {
-      messageType: "DOCUMENT",
-      mediaId: message.document.id || null,
-      mimeType: message.document.mime_type || null,
-      caption: message.document.caption || null,
-      fileName: message.document.filename ? sanitizeFileName(message.document.filename) : null,
-      fileSize: null,
-      duration: null
-    };
+    return buildInboundMedia("DOCUMENT", message.document);
+  }
+
+  if (message.sticker) {
+    return buildInboundMedia("STICKER", message.sticker, {
+      caption: null,
+      fileName: null
+    });
   }
 
   return null;
@@ -124,9 +191,15 @@ async function downloadInboundMedia(media) {
   }
 
   try {
+    logger.debugStep("Downloading inbound WhatsApp media", {
+      mediaId: media.mediaId,
+      messageType: media.messageType,
+      mimeType: media.mimeType || null
+    });
+
     const downloaded = await whatsapp.downloadMedia(media.mediaId);
-    const mimeType = downloaded.mimeType || media.mimeType;
-    const fileSize = downloaded.fileSize || media.fileSize || downloaded.buffer.length;
+    const mimeType = normalizeMimeType(downloaded.mimeType || media.mimeType);
+    const fileSize = Number(downloaded.fileSize) || Number(media.fileSize) || downloaded.buffer.length;
 
     if (!allowedMimeTypes.has(mimeType)) {
       logger.warn({
@@ -143,7 +216,17 @@ async function downloadInboundMedia(media) {
 
     const saved = await saveMediaBuffer(downloaded.buffer, {
       originalName: media.fileName || media.mediaId,
-      mimeType
+      mimeType,
+      subDir: "inbound"
+    });
+
+    logger.debugStep("Saved inbound WhatsApp media locally", {
+      mediaId: media.mediaId,
+      messageType: media.messageType,
+      mimeType,
+      fileSize,
+      localPath: saved.localPath,
+      mediaUrl: saved.mediaUrl
     });
 
     return {
@@ -165,6 +248,7 @@ async function downloadInboundMedia(media) {
 }
 
 module.exports = {
+  inferOutboundMediaType,
   normalizeOutboundMediaType,
   validateUploadedMedia,
   saveUploadedMedia,

@@ -2,9 +2,10 @@ const IORedis = require("ioredis");
 const env = require("./env");
 const logger = require("./logger");
 
-function createRedisConnection() {
+function createRedisConnection(options = {}) {
   const connection = new IORedis(env.REDIS_URL, {
-    maxRetriesPerRequest: null
+    maxRetriesPerRequest: null,
+    ...options
   });
 
   connection.on("error", (error) => {

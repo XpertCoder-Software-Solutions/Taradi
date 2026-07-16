@@ -2,7 +2,7 @@ import axios, { AxiosError } from "axios";
 import { clearSession, getStoredToken } from "./storage";
 import type { ApiFailure, ApiSuccess } from "../types/api";
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://waapi.taradiy.com";
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE_URL;
 
 export const api = axios.create({
@@ -10,10 +10,25 @@ export const api = axios.create({
   timeout: 20000
 });
 
+function shouldAttachAuthHeader(url?: string) {
+  if (!url) {
+    return true;
+  }
+
+  try {
+    const apiOrigin = new URL(API_BASE_URL).origin;
+    const requestOrigin = new URL(url, API_BASE_URL).origin;
+
+    return requestOrigin === apiOrigin;
+  } catch {
+    return !/^https?:\/\//i.test(url);
+  }
+}
+
 api.interceptors.request.use((config) => {
   const token = getStoredToken();
 
-  if (token) {
+  if (token && shouldAttachAuthHeader(config.url)) {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
@@ -58,4 +73,8 @@ export function absoluteMediaUrl(mediaUrl?: string | null) {
   }
 
   return `${API_BASE_URL}${mediaUrl}`;
+}
+
+export function messageMediaEndpoint(messageId: string) {
+  return `${API_BASE_URL}/api/messages/${encodeURIComponent(messageId)}/media`;
 }

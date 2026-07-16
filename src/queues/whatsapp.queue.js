@@ -1,26 +1,38 @@
 const { Queue } = require("bullmq");
 const { createRedisConnection } = require("../config/redis");
 const logger = require("../config/logger");
+const env = require("../config/env");
 const { WHATSAPP_OUTBOUND_QUEUE } = require("./whatsapp.constants");
 
-const connection = createRedisConnection();
+let connection = null;
+let whatsappOutboundQueue = null;
 
-const whatsappOutboundQueue = new Queue(WHATSAPP_OUTBOUND_QUEUE, {
-  connection,
-  defaultJobOptions: {
-    removeOnComplete: 1000,
-    removeOnFail: 5000,
-    attempts: 1,
-    backoff: {
-      type: "exponential",
-      delay: 5000
-    }
+function getWhatsAppQueue() {
+  if (!connection) {
+    connection = createRedisConnection();
   }
-});
 
-whatsappOutboundQueue.on("error", (error) => {
-  logger.error({ err: error, queue: WHATSAPP_OUTBOUND_QUEUE }, "WhatsApp outbound queue error");
-});
+  if (!whatsappOutboundQueue) {
+    whatsappOutboundQueue = new Queue(WHATSAPP_OUTBOUND_QUEUE, {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 1000,
+        removeOnFail: 5000,
+        attempts: env.WHATSAPP_QUEUE_ATTEMPTS,
+        backoff: {
+          type: "exponential",
+          delay: 5000
+        }
+      }
+    });
+
+    whatsappOutboundQueue.on("error", (error) => {
+      logger.error({ err: error, queue: WHATSAPP_OUTBOUND_QUEUE }, "WhatsApp outbound queue error");
+    });
+  }
+
+  return whatsappOutboundQueue;
+}
 
 function assertMessageId(messageId) {
   if (!messageId || typeof messageId !== "string") {
@@ -32,7 +44,7 @@ async function enqueueOutboundMessage(messageId) {
   assertMessageId(messageId);
 
   try {
-    const job = await whatsappOutboundQueue.add(
+    const job = await getWhatsAppQueue().add(
       "send-whatsapp-message",
       { messageId },
       {
@@ -54,13 +66,21 @@ async function enqueueOutboundMessage(messageId) {
 }
 
 async function closeWhatsAppQueue() {
-  await whatsappOutboundQueue.close();
-  await connection.quit();
+  if (whatsappOutboundQueue) {
+    await whatsappOutboundQueue.close();
+    whatsappOutboundQueue = null;
+  }
+
+  if (connection && connection.status !== "end") {
+    await connection.quit();
+  }
+
+  connection = null;
 }
 
 module.exports = {
   WHATSAPP_OUTBOUND_QUEUE,
-  whatsappOutboundQueue,
+  getWhatsAppQueue,
   enqueueOutboundMessage,
   closeWhatsAppQueue
 };

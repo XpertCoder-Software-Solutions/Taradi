@@ -29,7 +29,7 @@ export function Button({ className, variant = "primary", size = "md", icon, chil
   return (
     <button
       className={cn(
-        "inline-flex shrink-0 items-center justify-center gap-2 font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-60 [&_svg]:shrink-0",
         variants[variant],
         sizes[size],
         className

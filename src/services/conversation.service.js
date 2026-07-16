@@ -1,7 +1,9 @@
 const prisma = require("../config/prisma");
+const logger = require("../config/logger");
 const ApiError = require("../utils/apiError");
 const getPagination = require("../utils/pagination");
 const { safeNormalizePhone } = require("../utils/normalizePhone");
+const { friendlyWhatsAppFailureMessage } = require("../utils/whatsappErrors");
 const { hasPermission } = require("./permission.service");
 const { safeRecordEmployeeActivity } = require("./employeeActivity.service");
 
@@ -25,7 +27,7 @@ const userSummarySelect = {
   isActive: true
 };
 
-const validStatuses = ["OPEN", "PENDING", "CLOSED"];
+const validStatuses = ["OPEN", "PENDING", "CLOSED", "ARCHIVED"];
 const validPriorities = ["LOW", "NORMAL", "HIGH", "URGENT"];
 
 function conversationInclude() {
@@ -102,7 +104,7 @@ function formatMessageSummary(message) {
     statusUpdatedAt: message.statusUpdatedAt,
     sentByUserId: message.sentByUserId,
     sentByUser: message.sentByUser || null,
-    error: message.error,
+    error: friendlyWhatsAppFailureMessage(message.error, message.error),
     createdAt: message.createdAt,
     updatedAt: message.updatedAt
   };
@@ -128,7 +130,8 @@ function formatConversation(conversation) {
           collectionStatus: conversation.customer.collectionStatus || "ACTIVE_DEBT",
           collectionStatusLabel: collectionStatusLabels[conversation.customer.collectionStatus] || "مديونية قائمة",
           contactBlocked: blockedCollectionStatuses.includes(conversation.customer.collectionStatus),
-          whatsappProfileName: conversation.customer.whatsappProfileName
+          whatsappProfileName: conversation.customer.whatsappProfileName,
+          source: conversation.customer.source || "MANUAL"
         }
       : null,
     assignedEmployeeId: conversation.assignedEmployeeId,
@@ -140,13 +143,18 @@ function formatConversation(conversation) {
     priority: conversation.priority,
     tags: conversation.tags || [],
     archivedAt: conversation.archivedAt,
+    archivedById: conversation.archivedById || null,
+    archiveReason: conversation.archiveReason || null,
+    previousAssigneeId: conversation.previousAssigneeId || null,
+    reassignedToId: conversation.reassignedToId || null,
+    reassignedAt: conversation.reassignedAt || null,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt
   };
 }
 
-async function getCustomerAssignment(customerId) {
-  const customer = await prisma.customer.findUnique({
+async function getCustomerAssignment(customerId, db = prisma) {
+  const customer = await db.customer.findUnique({
     where: { id: customerId },
     select: {
       id: true,
@@ -163,7 +171,8 @@ async function getCustomerAssignment(customerId) {
 }
 
 async function ensureConversationForCustomer(customerId, options = {}) {
-  const customer = await getCustomerAssignment(customerId);
+  const db = options.tx || prisma;
+  const customer = options.customer || await getCustomerAssignment(customerId, db);
   const assignedEmployeeId = Object.prototype.hasOwnProperty.call(options, "assignedEmployeeId")
     ? options.assignedEmployeeId
     : customer.assignedToId;
@@ -176,12 +185,14 @@ async function ensureConversationForCustomer(customerId, options = {}) {
     data.tags = options.tags;
   }
 
-  return prisma.conversation.upsert({
-    where: { customerId },
+  return db.conversation.upsert({
+    where: { activeKey: customerId },
     update: data,
     create: {
       customerId,
+      activeKey: customerId,
       assignedEmployeeId: assignedEmployeeId || null,
+      status: options.status || "OPEN",
       tags: options.tags || customer.tags || []
     },
     ...(options.include ? { include: options.include } : {})
@@ -195,19 +206,46 @@ async function syncConversationAssignment(customerId, employeeId) {
   });
 }
 
+function assertConversationVisibleToUser(conversation, user) {
+  if (user.role === "ADMIN") {
+    return;
+  }
+
+  const visibleIds = scopedConversationAssigneeIds(user);
+
+  if (!conversation.assignedEmployeeId || !visibleIds.includes(conversation.assignedEmployeeId)) {
+    throw new ApiError(404, "Conversation not found or not accessible");
+  }
+}
+
 async function getConversationForUserByCustomerId(customerId, user) {
   const conversation = await ensureConversationForCustomer(customerId, {
     include: conversationInclude()
   });
 
-  if (user.role !== "ADMIN") {
-    const visibleIds = scopedConversationAssigneeIds(user);
+  assertConversationVisibleToUser(conversation, user);
 
-    if (!conversation.assignedEmployeeId || !visibleIds.includes(conversation.assignedEmployeeId)) {
-      throw new ApiError(404, "Conversation not found or not accessible");
-    }
+  return conversation;
+}
+
+async function getConversationForUser(customerId, user, options = {}) {
+  if (!options.conversationId) {
+    return getConversationForUserByCustomerId(customerId, user);
   }
 
+  const conversation = await prisma.conversation.findFirst({
+    where: {
+      id: options.conversationId,
+      customerId
+    },
+    include: conversationInclude()
+  });
+
+  if (!conversation) {
+    throw new ApiError(404, "Conversation not found or not accessible");
+  }
+
+  assertConversationVisibleToUser(conversation, user);
   return conversation;
 }
 
@@ -252,8 +290,239 @@ async function touchConversationForMessage({ customerId, messageId, messageAt, d
   });
 }
 
+function buildArchivedConversationSystemMessage({ previousAssigneeName, newAssigneeName, actorName, reassignedAt }) {
+  const date = new Intl.DateTimeFormat("ar-EG", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(reassignedAt);
+
+  return `تم نقل العميل من ${previousAssigneeName || "غير مسند"} إلى ${newAssigneeName || "غير مسند"} بواسطة ${actorName || "النظام"} في ${date}.`;
+}
+
+function buildNewConversationSystemMessage({ newAssigneeName, actorName, reassignedAt }) {
+  const date = new Intl.DateTimeFormat("ar-EG", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(reassignedAt);
+
+  return `تم إسناد العميل إلى ${newAssigneeName || "غير مسند"} بواسطة ${actorName || "النظام"} في ${date}.`;
+}
+
+async function createSystemMessage(tx, { customerId, conversationId, body, actorId, createdAt }) {
+  const message = await tx.message.create({
+    data: {
+      customerId,
+      conversationId,
+      direction: "OUTBOUND",
+      type: "SYSTEM",
+      content: body,
+      body,
+      status: "SENT",
+      sentByUserId: actorId || null,
+      statusUpdatedAt: createdAt,
+      createdAt
+    }
+  });
+
+  await tx.conversation.update({
+    where: { id: conversationId },
+    data: {
+      lastMessageId: message.id,
+      lastMessageAt: createdAt
+    }
+  });
+
+  return message;
+}
+
+async function reassignCustomerConversationInTransaction(tx, {
+  customerId,
+  newAssigneeId,
+  actor,
+  reason = null,
+  preloadedCustomer = null,
+  newAssignee = null
+}) {
+  const now = new Date();
+  const actorId = actor && actor.id ? actor.id : null;
+  const actorName = actor && actor.name ? actor.name : "النظام";
+  const customer = preloadedCustomer || await tx.customer.findUnique({
+    where: { id: customerId },
+    include: {
+      assignedTo: { select: userSummarySelect }
+    }
+  });
+
+  if (!customer) {
+    throw new ApiError(404, "Customer not found or not accessible");
+  }
+
+  const currentAssigneeId = customer.assignedToId || null;
+
+  if (currentAssigneeId === (newAssigneeId || null)) {
+    const activeConversation = await ensureConversationForCustomer(customerId, {
+      tx,
+      customer,
+      assignedEmployeeId: newAssigneeId || null,
+      include: conversationInclude()
+    });
+
+    return {
+      customerId,
+      previousAssigneeId: currentAssigneeId,
+      newAssigneeId: newAssigneeId || null,
+      archivedConversationId: null,
+      activeConversationId: activeConversation.id,
+      reassignedAt: now,
+      sameAssignment: true
+    };
+  }
+
+  const activeConversations = await tx.conversation.findMany({
+    where: {
+      customerId,
+      activeKey: customerId
+    },
+    include: {
+      assignedEmployee: { select: userSummarySelect }
+    }
+  });
+
+  if (activeConversations.length > 1) {
+    logger.warn({
+      customerId,
+      activeConversationIds: activeConversations.map((conversation) => conversation.id)
+    }, "Customer has multiple active conversations; refusing reassignment");
+    throw new ApiError(409, "يوجد أكثر من محادثة نشطة لهذا العميل، يرجى مراجعة الدعم قبل إعادة الإسناد");
+  }
+
+  const activeConversation = activeConversations[0] || null;
+  const previousAssigneeId = activeConversation && activeConversation.assignedEmployeeId
+    ? activeConversation.assignedEmployeeId
+    : currentAssigneeId;
+  const previousAssigneeName = activeConversation && activeConversation.assignedEmployee
+    ? activeConversation.assignedEmployee.name
+    : customer.assignedTo ? customer.assignedTo.name : null;
+  const newAssigneeName = newAssignee && newAssignee.name ? newAssignee.name : null;
+  let archivedConversationId = null;
+
+  if (activeConversation) {
+    await tx.conversation.update({
+      where: { id: activeConversation.id },
+      data: {
+        activeKey: null,
+        status: "ARCHIVED",
+        archivedAt: now,
+        archivedById: actorId,
+        archiveReason: reason,
+        previousAssigneeId,
+        reassignedToId: newAssigneeId || null,
+        reassignedAt: now,
+        unreadCount: 0
+      }
+    });
+    archivedConversationId = activeConversation.id;
+
+    await createSystemMessage(tx, {
+      customerId,
+      conversationId: activeConversation.id,
+      body: buildArchivedConversationSystemMessage({
+        previousAssigneeName,
+        newAssigneeName,
+        actorName,
+        reassignedAt: now
+      }),
+      actorId,
+      createdAt: now
+    });
+  }
+
+  const newActiveConversation = await tx.conversation.create({
+    data: {
+      customerId,
+      activeKey: customerId,
+      assignedEmployeeId: newAssigneeId || null,
+      status: "OPEN",
+      unreadCount: 0,
+      tags: customer.tags || [],
+      lastMessageAt: now
+    }
+  });
+
+  await createSystemMessage(tx, {
+    customerId,
+    conversationId: newActiveConversation.id,
+    body: buildNewConversationSystemMessage({
+      newAssigneeName,
+      actorName,
+      reassignedAt: now
+    }),
+    actorId,
+    createdAt: now
+  });
+
+  await tx.customer.update({
+    where: { id: customerId },
+    data: { assignedToId: newAssigneeId || null }
+  });
+
+  await tx.conversationAssignmentHistory.create({
+    data: {
+      customerId,
+      archivedConversationId,
+      activeConversationId: newActiveConversation.id,
+      previousAssigneeId,
+      newAssigneeId: newAssigneeId || null,
+      reassignedById: actorId,
+      reason
+    }
+  });
+
+  logger.info({
+    actorId,
+    customerId,
+    previousAssigneeId,
+    newAssigneeId: newAssigneeId || null,
+    archivedConversationId,
+    activeConversationId: newActiveConversation.id,
+    reason
+  }, "Customer reassigned and previous conversation archived");
+
+  return {
+    customerId,
+    previousAssigneeId,
+    newAssigneeId: newAssigneeId || null,
+    archivedConversationId,
+    activeConversationId: newActiveConversation.id,
+    reassignedAt: now,
+    sameAssignment: false
+  };
+}
+
+async function reassignCustomerConversation(customerId, newAssigneeId, actor, options = {}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${customerId} FOR UPDATE`;
+    return reassignCustomerConversationInTransaction(tx, {
+      customerId,
+      newAssigneeId,
+      actor,
+      reason: options.reason || null,
+      newAssignee: options.newAssignee || null
+    });
+  });
+}
+
 function buildConversationWhere(user, query) {
   const where = conversationAccessWhere(user);
+  const status = normalizeStatus(query.status);
+  const archivedOnly = normalizeBoolean(query.archivedOnly) || status === "ARCHIVED";
+
+  if (archivedOnly) {
+    where.status = "ARCHIVED";
+    where.archivedAt = { not: null };
+  } else {
+    where.activeKey = { not: null };
+  }
 
   if (user.role === "ADMIN") {
     if (query.assignedEmployeeId) {
@@ -271,8 +540,7 @@ function buildConversationWhere(user, query) {
     }
   }
 
-  const status = normalizeStatus(query.status);
-  if (status) {
+  if (status && status !== "ARCHIVED") {
     where.status = status;
   }
 
@@ -331,7 +599,9 @@ async function listConversations(user, query) {
 }
 
 async function listConversationMessages(customerId, user, query) {
-  const conversation = await getConversationForUserByCustomerId(customerId, user);
+  const conversation = await getConversationForUser(customerId, user, {
+    conversationId: query.conversationId || null
+  });
   const limit = Math.min(Math.max(Number(query.limit || 100), 1), 200);
   const cursor = query.cursor;
 
@@ -339,7 +609,7 @@ async function listConversationMessages(customerId, user, query) {
     where: {
       OR: [
         { conversationId: conversation.id },
-        { customerId: conversation.customerId }
+        { customerId: conversation.customerId, conversationId: null }
       ]
     },
     take: limit,
@@ -352,9 +622,27 @@ async function listConversationMessages(customerId, user, query) {
     }
   });
 
+  const formattedMessages = messages.map(formatMessageSummary);
+
+  logger.debugStep("GET messages media URLs returned", {
+    customerId,
+    conversationId: conversation.id,
+    mediaMessages: formattedMessages
+      .filter((message) => message.mediaId || message.mediaUrl || ["IMAGE", "VIDEO", "AUDIO", "VOICE", "DOCUMENT", "STICKER"].includes(message.type))
+      .map((message) => ({
+        id: message.id,
+        type: message.type,
+        mediaId: message.mediaId,
+        mediaUrl: message.mediaUrl,
+        mimeType: message.mimeType,
+        fileSize: message.fileSize,
+        caption: message.caption
+      }))
+  });
+
   return {
     conversation: formatConversation(conversation),
-    items: messages.map(formatMessageSummary),
+    items: formattedMessages,
     meta: {
       limit,
       nextCursor: messages.length === limit ? messages[messages.length - 1].id : null
@@ -405,6 +693,10 @@ async function updateConversationStatus(customerId, user, status) {
     throw new ApiError(400, "Invalid conversation status");
   }
 
+  if (normalized === "ARCHIVED") {
+    throw new ApiError(400, "Conversation archiving is only available through customer reassignment");
+  }
+
   const conversation = await getConversationForUserByCustomerId(customerId, user);
   const updated = await prisma.conversation.update({
     where: { id: conversation.id },
@@ -444,6 +736,11 @@ module.exports = {
   conversationAccessWhere,
   ensureConversationForCustomer,
   syncConversationAssignment,
+  reassignCustomerConversation,
+  reassignCustomerConversationInTransaction,
+  buildArchivedConversationSystemMessage,
+  buildNewConversationSystemMessage,
+  getConversationForUser,
   getConversationForUserByCustomerId,
   touchConversationForMessage,
   listConversations,

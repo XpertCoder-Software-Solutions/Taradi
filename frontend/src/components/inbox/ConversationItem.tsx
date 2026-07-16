@@ -5,12 +5,41 @@ import type { Conversation, Message } from "../../types/api";
 import { Avatar } from "../ui/Avatar";
 import { ArabicBadge } from "./ArabicBadge";
 
+const mediaPlaceholderPattern = /^\[(image|video|audio|voice|document|sticker)\]$/i;
+
+function firstPreviewText(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+
+    if (text && !mediaPlaceholderPattern.test(text)) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function mediaPreview(message: Message) {
+  if (message.type === "IMAGE") return "صورة";
+  if (message.type === "VIDEO") return "فيديو";
+  if (message.type === "AUDIO" || message.type === "VOICE") return "رسالة صوتية";
+  if (message.type === "STICKER") return "ملصق";
+  if (message.type === "DOCUMENT") {
+    const fileName = message.fileName || "";
+    return message.mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf")
+      ? "ملف PDF"
+      : "مستند";
+  }
+
+  return messageTypeLabel[message.type] || "رسالة غير مدعومة";
+}
+
 function messagePreview(message: Message | null) {
   if (!message) {
     return "لا توجد رسائل حتى الآن";
   }
 
-  return message.body || message.caption || message.fileName || message.templateName || messageTypeLabel[message.type];
+  return firstPreviewText(message.caption, message.body, message.content, message.templateName) || mediaPreview(message);
 }
 
 export function ConversationItem({ conversation, selected, onSelect }: {

@@ -1,5 +1,8 @@
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
+const xlsx = require("xlsx");
 const prisma = require("../config/prisma");
+const logger = require("../config/logger");
 const { sanitizeUser } = require("./auth.service");
 const { getPresenceForUserIds, isUserOnline } = require("./presence.service");
 const ApiError = require("../utils/apiError");
@@ -61,6 +64,162 @@ function normalizeRequiredEmail(value) {
 
 function normalizeName(data) {
   return String(data.employeeName || data.supervisorName || data.name || "").trim();
+}
+
+function normalizeImportKey(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[إأآا]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .toLowerCase();
+}
+
+function normalizeImportCell(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : String(value).trim();
+  }
+
+  return String(value).trim();
+}
+
+function getImportCell(row, aliases) {
+  const normalizedAliases = aliases.map(normalizeImportKey);
+  const entries = Object.entries(row || {});
+
+  for (const alias of normalizedAliases) {
+    const found = entries.find(([key]) => normalizeImportKey(key) === alias);
+
+    if (!found) {
+      continue;
+    }
+
+    const value = normalizeImportCell(found[1]);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function parseImportActiveStatus(value) {
+  const status = normalizeImportCell(value);
+  const normalized = normalizeImportKey(status);
+
+  if (!status) {
+    return true;
+  }
+
+  if (["نشط", "active", "enabled", "true", "1"].includes(normalized)) {
+    return true;
+  }
+
+  if (["غيرنشط", "معطل", "inactive", "disabled", "false", "0"].includes(normalized)) {
+    return false;
+  }
+
+  throw new ApiError(400, `حالة الحساب غير معروفة: ${status}`);
+}
+
+function parseEmployeeImportRows(file) {
+  if (!file || !file.buffer) {
+    throw new ApiError(400, "ملف Excel مطلوب");
+  }
+
+  let workbook;
+
+  try {
+    workbook = xlsx.read(file.buffer, {
+      type: "buffer",
+      cellDates: false,
+      raw: false
+    });
+  } catch (error) {
+    throw new ApiError(400, "تعذر قراءة ملف Excel");
+  }
+
+  const sheetName = workbook.SheetNames[0];
+
+  if (!sheetName) {
+    throw new ApiError(400, "ملف Excel لا يحتوي على أوراق");
+  }
+
+  const worksheet = workbook.Sheets[sheetName];
+  const rawRows = xlsx.utils.sheet_to_json(worksheet, {
+    defval: "",
+    raw: false
+  });
+  const validRows = [];
+  const failedRows = [];
+  let skipped = 0;
+  const seenCodes = new Set();
+
+  rawRows.forEach((row, index) => {
+    const sheetRowNumber = index + 2;
+    const employeeName = getImportCell(row, ["اسم الموظف", "الاسم", "اسم", "employeeName", "fullName", "name"]);
+    const employeeCode = normalizeEmployeeCode(getImportCell(row, ["التحويلة", "الكود", "كود الموظف", "employeeCode"]));
+    const supervisorName = getImportCell(row, ["اسم المشرف", "المشرف", "supervisorName"]);
+    const password = getImportCell(row, ["كلمة المرور", "كلمه المرور", "password"]);
+    const rawStatus = getImportCell(row, ["حالة الحساب", "الحالة", "isActive"]);
+    const hasAnyValue = [employeeName, employeeCode, supervisorName, password, rawStatus].some(Boolean);
+
+    if (!hasAnyValue) {
+      skipped += 1;
+      return;
+    }
+
+    try {
+      if (!employeeName) {
+        throw new ApiError(400, "اسم الموظف مطلوب");
+      }
+
+      if (!employeeCode) {
+        throw new ApiError(400, "التحويلة مطلوبة");
+      }
+
+      if (seenCodes.has(employeeCode)) {
+        throw new ApiError(400, `التحويلة مكررة داخل الملف: ${employeeCode}`);
+      }
+
+      if (!supervisorName) {
+        throw new ApiError(400, "اسم المشرف مطلوب");
+      }
+
+      if (!password) {
+        throw new ApiError(400, "كلمة المرور مطلوبة");
+      }
+
+      seenCodes.add(employeeCode);
+      validRows.push({
+        rowNumber: sheetRowNumber,
+        employeeName,
+        employeeCode,
+        supervisorName,
+        password,
+        isActive: parseImportActiveStatus(rawStatus)
+      });
+    } catch (error) {
+      failedRows.push({
+        row: sheetRowNumber,
+        employeeName: employeeName || null,
+        employeeCode: employeeCode || null,
+        reason: error.message || "تعذر قراءة الصف"
+      });
+    }
+  });
+
+  return {
+    totalRows: rawRows.length,
+    rows: validRows,
+    skipped,
+    failedRows
+  };
 }
 
 function parseBooleanFilter(value) {
@@ -171,6 +330,7 @@ async function buildEmployeeMetrics(userIds) {
       by: ["assignedEmployeeId"],
       where: {
         assignedEmployeeId: { in: userIds },
+        activeKey: { not: null },
         status: "OPEN"
       },
       _count: {
@@ -180,7 +340,8 @@ async function buildEmployeeMetrics(userIds) {
     prisma.conversation.groupBy({
       by: ["assignedEmployeeId"],
       where: {
-        assignedEmployeeId: { in: userIds }
+        assignedEmployeeId: { in: userIds },
+        activeKey: { not: null }
       },
       _sum: {
         unreadCount: true
@@ -372,6 +533,113 @@ async function assertUniqueEmail(email, ignoredUserId) {
   }
 }
 
+function hashNameForEmail(name) {
+  return crypto.createHash("sha1").update(String(name || "")).digest("hex").slice(0, 10);
+}
+
+function slugifyEmailLocalPart(name) {
+  const ascii = String(name || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+
+  return ascii || `supervisor-${hashNameForEmail(name)}`;
+}
+
+async function buildUniqueSupervisorEmail(supervisorName) {
+  const base = slugifyEmailLocalPart(supervisorName);
+  let attempt = 0;
+
+  while (attempt < 50) {
+    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+    const email = `${base}${suffix}@tradi.com`;
+    const existing = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true }
+    });
+
+    if (!existing) {
+      return email;
+    }
+
+    attempt += 1;
+  }
+
+  return `supervisor-${hashNameForEmail(`${supervisorName}-${Date.now()}`)}@tradi.com`;
+}
+
+async function findSupervisorByName(supervisorName) {
+  return prisma.user.findFirst({
+    where: {
+      role: "SUPERVISOR",
+      name: {
+        equals: supervisorName,
+        mode: "insensitive"
+      }
+    },
+    select: {
+      id: true,
+      name: true,
+      isActive: true
+    }
+  });
+}
+
+async function findOrCreateImportSupervisor(supervisorName, cache, summary) {
+  const normalizedName = normalizeImportKey(supervisorName);
+
+  if (cache.has(normalizedName)) {
+    return cache.get(normalizedName);
+  }
+
+  const existing = await findSupervisorByName(supervisorName);
+
+  if (existing) {
+    const supervisor = existing.isActive
+      ? existing
+      : await prisma.user.update({
+          where: { id: existing.id },
+          data: { isActive: true },
+          select: {
+            id: true,
+            name: true,
+            isActive: true
+          }
+        });
+
+    cache.set(normalizedName, supervisor);
+    return supervisor;
+  }
+
+  const [email, passwordHash] = await Promise.all([
+    buildUniqueSupervisorEmail(supervisorName),
+    bcrypt.hash(crypto.randomBytes(18).toString("base64url"), 12)
+  ]);
+  const supervisor = await prisma.user.create({
+    data: {
+      name: supervisorName,
+      email,
+      employeeCode: null,
+      passwordHash,
+      role: "SUPERVISOR",
+      supervisorId: null,
+      isActive: true
+    },
+    select: {
+      id: true,
+      name: true,
+      isActive: true
+    }
+  });
+
+  summary.supervisorsCreated += 1;
+  cache.set(normalizedName, supervisor);
+  return supervisor;
+}
+
 async function assertActiveSupervisor(supervisorId) {
   if (!supervisorId) {
     throw new ApiError(400, "اسم المشرف مطلوب للموظف");
@@ -520,9 +788,32 @@ async function getEmployeePresence(user) {
   return getPresenceForUserIds(userIds);
 }
 
-async function createEmployee(data) {
+function resolveCreateEmployeeArgs(actorOrData, maybeData) {
+  if (maybeData) {
+    return {
+      actor: actorOrData,
+      data: maybeData
+    };
+  }
+
+  return {
+    actor: { id: null, role: "ADMIN" },
+    data: actorOrData
+  };
+}
+
+async function createEmployee(actorOrData, maybeData) {
+  const { actor, data } = resolveCreateEmployeeArgs(actorOrData, maybeData);
   const name = normalizeName(data);
   const role = data.role;
+
+  if (!actor || !["ADMIN", "SUPERVISOR"].includes(actor.role)) {
+    throw new ApiError(403, "لا تملك صلاحية إنشاء موظف");
+  }
+
+  if (actor.role === "SUPERVISOR" && role !== "EMPLOYEE") {
+    throw new ApiError(403, "لا يمكن للمشرف إنشاء حسابات بصلاحيات أعلى");
+  }
 
   if (!name) {
     throw new ApiError(400, role === "SUPERVISOR" ? "اسم المشرف مطلوب" : "اسم الموظف مطلوب");
@@ -541,6 +832,10 @@ async function createEmployee(data) {
   let supervisorId = null;
 
   if (role === "SUPERVISOR") {
+    if (actor.role !== "ADMIN") {
+      throw new ApiError(403, "لا يمكن إنشاء مشرف إلا بواسطة المدير");
+    }
+
     email = normalizeRequiredEmail(data.email);
     await assertUniqueEmail(email);
   } else {
@@ -552,8 +847,8 @@ async function createEmployee(data) {
     }
 
     await assertUniqueEmployeeCode(employeeCode);
-    await assertActiveSupervisor(data.supervisorId);
-    supervisorId = data.supervisorId;
+    supervisorId = actor.role === "SUPERVISOR" ? actor.id : data.supervisorId;
+    await assertActiveSupervisor(supervisorId);
   }
 
   const passwordHash = await bcrypt.hash(data.password, 12);
@@ -569,6 +864,15 @@ async function createEmployee(data) {
       isActive: data.isActive === undefined ? true : Boolean(data.isActive)
     }
   });
+
+  logger.info({
+    auditEvent: "employee.created",
+    actorId: actor.id || null,
+    actorRole: actor.role,
+    employeeId: employee.id,
+    employeeRole: role,
+    supervisorId
+  }, "Employee account created");
 
   return getStaffById(employee.id);
 }
@@ -713,6 +1017,115 @@ async function activateEmployee(id) {
   return updateEmployee(id, { isActive: true });
 }
 
+async function importEmployeesFromExcel(file, actor) {
+  const parsed = parseEmployeeImportRows(file);
+  const summary = {
+    totalRows: parsed.totalRows,
+    created: 0,
+    updated: 0,
+    skipped: parsed.skipped,
+    supervisorsCreated: 0,
+    failedRows: [...parsed.failedRows],
+    errors: parsed.failedRows
+  };
+  const supervisorCache = new Map();
+
+  for (const row of parsed.rows) {
+    try {
+      let supervisor;
+
+      if (actor?.role === "SUPERVISOR") {
+        if (normalizeImportKey(row.supervisorName) !== normalizeImportKey(actor.name)) {
+          throw new ApiError(403, "يمكنك استيراد الموظفين التابعين لك فقط");
+        }
+
+        supervisor = { id: actor.id, name: actor.name, isActive: actor.isActive };
+      } else {
+        supervisor = await findOrCreateImportSupervisor(row.supervisorName, supervisorCache, summary);
+      }
+      const passwordHash = await bcrypt.hash(row.password, 12);
+      const existing = await prisma.user.findUnique({
+        where: { employeeCode: row.employeeCode },
+        select: {
+          id: true,
+          role: true,
+          supervisorId: true
+        }
+      });
+
+      if (existing) {
+        if (existing.role !== "EMPLOYEE") {
+          throw new ApiError(400, "التحويلة مستخدمة لحساب غير موظف");
+        }
+
+        if (actor?.role === "SUPERVISOR" && existing.supervisorId !== actor.id) {
+          throw new ApiError(403, "لا يمكنك تعديل موظف تابع لمشرف آخر");
+        }
+
+        await prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            name: row.employeeName,
+            email: null,
+            employeeCode: row.employeeCode,
+            passwordHash,
+            role: "EMPLOYEE",
+            supervisorId: supervisor.id,
+            isActive: row.isActive
+          }
+        });
+        summary.updated += 1;
+      } else {
+        await prisma.user.create({
+          data: {
+            name: row.employeeName,
+            email: null,
+            employeeCode: row.employeeCode,
+            passwordHash,
+            role: "EMPLOYEE",
+            supervisorId: supervisor.id,
+            isActive: row.isActive
+          }
+        });
+        summary.created += 1;
+      }
+    } catch (error) {
+      summary.failedRows.push({
+        row: row.rowNumber,
+        employeeName: row.employeeName || null,
+        employeeCode: row.employeeCode || null,
+        reason: error.message || "تعذر استيراد الصف"
+      });
+    }
+  }
+
+  summary.failed = summary.failedRows.length;
+  summary.errors = summary.failedRows;
+  return summary;
+}
+
+function buildEmployeeImportTemplate() {
+  const worksheet = xlsx.utils.json_to_sheet([{
+    "الاسم": "",
+    "التحويلة": "",
+    "اسم المشرف": "",
+    "كلمة المرور": "",
+    "حالة الحساب": "نشط"
+  }]);
+  const workbook = xlsx.utils.book_new();
+
+  worksheet["!cols"] = [
+    { wch: 28 },
+    { wch: 14 },
+    { wch: 28 },
+    { wch: 20 },
+    { wch: 16 }
+  ];
+  xlsx.utils.book_append_sheet(workbook, worksheet, "الموظفون");
+
+  return xlsx.write(workbook, { type: "buffer", bookType: "xlsx" });
+}
+
 async function assertAssignableStaff(assigneeId, actor) {
   if (!assigneeId) {
     return null;
@@ -767,9 +1180,12 @@ module.exports = {
   updateEmployee,
   deactivateEmployee,
   activateEmployee,
+  importEmployeesFromExcel,
+  buildEmployeeImportTemplate,
   assertEmployee,
   assertAssignableStaff,
   assertActiveSupervisor,
   staffRoles,
-  staffSelect
+  staffSelect,
+  parseEmployeeImportRows
 };

@@ -1,6 +1,6 @@
 # Taradi Backend Architecture
 
-Taradi is split into an API process and a background worker process. Both processes share PostgreSQL through Prisma and Redis through BullMQ.
+Taradi is split into an API process and background worker processes. All processes share PostgreSQL through Prisma and Redis through BullMQ.
 
 ## API Server
 
@@ -13,14 +13,14 @@ Responsibilities:
 - JWT authentication, role checks, and dynamic permission guards
 - Customer, employee, inbox, and message APIs
 - Conversation Engine APIs under `/api/chats`
-- WhatsApp webhook verification and inbound event handling
+- WhatsApp webhook verification and inbound event queueing
 - Socket.IO realtime notifications
-- Queueing outbound WhatsApp messages
+- Queueing outbound WhatsApp messages and inbound webhook processing
 - Structured HTTP logging through Pino
 - Centralized JSON success and error formats
 - API and auth rate limiting
 
-The API does not send bulk campaign messages directly in the request lifecycle. It creates outbound `Message` records with `QUEUED` status and adds jobs to Redis.
+The API does not send bulk campaign messages or process inbound webhooks directly in the request lifecycle. It creates durable database records and adds jobs to Redis.
 
 ## PostgreSQL
 
@@ -38,6 +38,8 @@ Stored data:
 - Per-user read state for unread counts
 
 Prisma schema and migrations live in `prisma/`.
+
+Performance index notes live in `docs/DATABASE_PERFORMANCE.md`.
 
 ## Conversation Engine
 
@@ -129,7 +131,7 @@ Data scope is enforced after permission checks:
 
 ## Redis
 
-Redis is used by BullMQ for background jobs.
+Redis is used by BullMQ for background jobs and as the preferred shared store for API rate limiting.
 
 Local Redis is provided by `docker-compose.yml` at:
 
@@ -139,21 +141,26 @@ redis://localhost:6379
 
 ## BullMQ
 
-Queue name:
+Queue names:
 
 ```text
 whatsapp-outbound
+whatsapp-webhook-processing
 ```
 
-Producer:
+Producers:
 
 - API server via `src/queues/whatsapp.queue.js`
+- API server via `src/queues/webhook.queue.js`
 
-Consumer:
+Consumers:
 
 - Worker process via `src/workers/whatsapp.worker.js`
+- Worker process via `src/workers/whatsapp-webhook.worker.js`
 
 Each outbound message job contains a database `messageId`. The worker loads the message from PostgreSQL, sends it through WhatsApp Cloud API, then updates the message status.
+
+Each webhook job contains a `WebhookEvent.id`. The webhook worker loads the audited payload from PostgreSQL, dispatches it to the event-specific handler, and lets BullMQ retry transient failures.
 
 ## WhatsApp Webhook
 
@@ -161,6 +168,9 @@ Routes:
 
 - `GET /api/whatsapp/webhook`
 - `POST /api/whatsapp/webhook`
+- `GET /api/whatsapp/templates`
+- `POST /api/whatsapp/templates/sync`
+- `POST /api/whatsapp/messages/template`
 
 The GET route returns Meta's challenge string for webhook verification.
 
@@ -173,6 +183,12 @@ The POST route safely handles:
 - Template quality updates
 - Template components updates
 - Phone number quality updates
+
+## WhatsApp Templates
+
+`WhatsappTemplate` stores Meta-approved template definitions locally for fast CRM browsing and sending. The API sync calls `/{WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates`, follows Meta pagination, and upserts by `metaTemplateId` or `name + language` to avoid duplicates.
+
+The API lists approved templates by default, while `status=ALL` returns every synced status. Admins can trigger manual sync, and the server schedules an automatic sync every six hours. Single template sends use the synced record as the source of truth, validate the template is `APPROVED`, build body/header/button text parameters from stored variables, send through `/{WHATSAPP_PHONE_NUMBER_ID}/messages`, then save the outbound `Message` and emit the normal chat realtime events.
 - Account alerts
 - Calls events, which are intentionally ignored for now
 - Unknown or malformed payloads without crashing
@@ -193,7 +209,9 @@ POST /api/whatsapp/webhook
   -> signature middleware, if enabled
   -> create WebhookEvent audit row
   -> detect event type
-  -> dispatcher
+  -> enqueue whatsapp-webhook-processing job
+  -> return HTTP success to Meta
+  -> webhook worker dispatcher
   -> event-specific handler
   -> update WebhookEvent status
 ```

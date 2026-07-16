@@ -10,6 +10,8 @@ const knownMessageTypes = new Set([
   "sticker",
   "interactive",
   "button",
+  "unsupported",
+  "system",
   "contacts",
   "location",
   "reaction"

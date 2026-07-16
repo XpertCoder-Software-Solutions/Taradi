@@ -1,44 +1,90 @@
 const { parse } = require("csv-parse/sync");
+const path = require("path");
+const xlsx = require("xlsx");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/apiError");
-const normalizePhone = require("../utils/normalizePhone");
 const {
   createCustomer,
   customerAccessWhere,
+  normalizeProjectName,
   updateCustomer
 } = require("./customer.service");
 const { assertAssignableStaff } = require("./employee.service");
+const { createDebt } = require("./customerDebt.service");
 
 const headerAliases = {
-  fullName: ["fullname", "name", "الاسم", "اسمالعميل"],
-  nationalId: ["nationalid", "رقمالهوية", "الهوية"],
-  accountNumber: ["accountnumber", "رقمالحساب"],
-  projectName: ["projectname", "project", "الجهة", "اسمالمشروع", "المشروع"],
-  debtAmount: ["debtamount", "amount", "مبلغالمديونية", "المديونية"],
-  serviceNumber: ["servicenumber", "رقمالخدمة"],
-  serviceActivationDate: ["serviceactivationdate", "تاريختفعيلالخدمة", "تاريخالتفعيل"],
-  serviceTerminationDate: ["serviceterminationdate", "تاريخإنهاءالخدمة", "تاريخانهاءالخدمة", "تاريخالإنهاء", "تاريخالانهاء"],
-  invoiceStatus: ["invoicestatus", "حالةالفاتورة"],
+  fullName: ["fullName", "name", "الاسم", "اسم العميل", "العميل"],
+  nationalId: ["nationalId", "رقم الهوية", "الهوية"],
+  accountNumber: ["accountNumber", "رقم الحساب"],
+  projectName: ["projectName", "project", "الجهة", "اسم المشروع", "المشروع"],
+  debtAmount: ["debtAmount", "amount", "مبلغ المديونية", "مبلغ الميدونية", "المديونية"],
+  serviceNumber: ["serviceNumber", "رقم الخدمة", "MSISDN"],
+  serviceActivationDate: ["serviceActivationDate", "تاريخ تفعيل الخدمة", "تأريخ تفعيل الخدمة", "CREATED_DATE"],
+  serviceTerminationDate: ["serviceTerminationDate", "تاريخ إنتهاء الخدمة", "تاريخ انتهاء الخدمة", "تاريخ إنهاء الخدمة", "تاريخ انهاء الخدمة", "STATUS_DATE"],
+  invoiceStatus: ["invoiceStatus", "حالة الفاتورة", "SERVICE_STATUS"],
   collectionStatus: ["collectionstatus", "حالةالتحصيل"],
   paidAt: ["paidat", "paymentdate", "تاريخالسداد"],
   paidAmount: ["paidamount", "amountpaid", "المبلغالمسدد"],
   paymentReference: ["paymentreference", "paymentref", "رقممرجعالسداد", "مرجعالسداد"],
   paymentNotes: ["paymentnotes", "ملاحظاتالسداد"],
-  debtYear: ["debtyear", "سنةالمديونية"],
-  primaryPhone: ["primaryphone", "phone", "رقمالهاتفالرئيسي", "رقمالهاتف", "الجوال", "رقمالجوال"],
+  debtYear: ["debtYear", "سنة المديونية", "تأريخ سنة المديونية", "تاريخ سنة المديونية"],
+  primaryPhone: ["primaryPhone", "phone", "رقم الهاتف الرئيسي", "رقم الهاتف", "الجوال", "رقم الجوال", "الرقم الرئيسي"],
   notes: ["notes", "ملاحظات"],
-  collectorName: ["collectorname", "assignee", "اسمالمحصل", "المحصل", "اسمالموظف"],
+  collectorName: ["collectorName", "assignee", "اسم المحصل", "المحصل", "اسم الموظف"],
+  sourceUsername: ["sourceUsername", "username", "اسم المستخدم"],
+  followUpStatus: ["followUpStatus", "المتابعة"],
   assignedEmployeeCode: ["assignedemployeecode", "كودالموظف"],
   assignedEmployeeEmail: ["assignedemployeeemail", "ايميلالموظف", "بريدالموظف"],
   assignedEmployeeId: ["assignedemployeeid", "معرفالموظف", "رقمالموظف"]
 };
 
+const invoiceStatusImportValues = {
+  "غيرمدفوعه": "UNPAID",
+  "غيرمدفوعة": "UNPAID",
+  unpaid: "UNPAID",
+  open: "UNPAID",
+  "closedn": "UNPAID",
+  "مدفوعه": "PAID",
+  "مدفوعة": "PAID",
+  paid: "PAID",
+  scheduled: "SCHEDULED",
+  "مجدوله": "SCHEDULED",
+  "مجدولة": "SCHEDULED",
+  disputed: "DISPUTED",
+  "متنازععليها": "DISPUTED",
+  cancelled: "CANCELLED",
+  canceled: "CANCELLED",
+  "ملغيه": "CANCELLED",
+  "ملغية": "CANCELLED"
+};
+
+function normalizeArabicDigits(value) {
+  const arabic = "٠١٢٣٤٥٦٧٨٩";
+  const persian = "۰۱۲۳۴۵۶۷۸۹";
+
+  return String(value || "").replace(/[٠-٩۰-۹]/g, (digit) => {
+    const arabicIndex = arabic.indexOf(digit);
+    if (arabicIndex !== -1) {
+      return String(arabicIndex);
+    }
+
+    return String(persian.indexOf(digit));
+  });
+}
+
 function normalizeHeader(value) {
-  return String(value || "")
+  return normalizeArabicDigits(value)
     .replace(/^\uFEFF/, "")
     .trim()
     .toLowerCase()
-    .replace(/[\s_\-.]+/g, "");
+    .replace(/[إأآا]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function normalizeImportKey(value) {
+  return normalizeHeader(value);
 }
 
 function isSecondaryPhoneHeader(header) {
@@ -59,7 +105,8 @@ function createHeaderMap(headers) {
   };
 
   for (const [field, aliases] of Object.entries(headerAliases)) {
-    const index = normalizedHeaders.findIndex((header) => aliases.includes(header));
+    const normalizedAliases = aliases.map(normalizeHeader);
+    const index = normalizedHeaders.findIndex((header) => normalizedAliases.includes(header));
     if (index !== -1) {
       map[field] = index;
     }
@@ -97,6 +144,221 @@ function parseCsv(buffer) {
       { reason: error.message }
     ]);
   }
+}
+
+function parseExcel(buffer) {
+  try {
+    const workbook = xlsx.read(buffer, {
+      type: "buffer",
+      cellDates: true
+    });
+    const sheetName = workbook.SheetNames[0];
+
+    if (!sheetName) {
+      throw new Error("Workbook has no sheets");
+    }
+
+    return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
+      header: 1,
+      defval: "",
+      blankrows: true,
+      raw: false,
+      dateNF: "dd/mm/yyyy"
+    });
+  } catch (error) {
+    throw new ApiError(400, "تعذر قراءة ملف Excel", [
+      { reason: error.message }
+    ]);
+  }
+}
+
+function parseImportFile(file) {
+  const extension = path.extname(file.originalname || "").toLowerCase();
+
+  if (extension === ".csv") {
+    return parseCsv(file.buffer);
+  }
+
+  if (extension === ".xlsx" || extension === ".xls") {
+    return parseExcel(file.buffer);
+  }
+
+  throw new ApiError(400, "يجب رفع ملف Excel أو CSV فقط");
+}
+
+function normalizeSaudiPhone(value) {
+  let phone = normalizeArabicDigits(value).replace(/[^\d]/g, "");
+
+  if (phone.startsWith("00")) {
+    phone = phone.slice(2);
+  }
+
+  if (phone.startsWith("966")) {
+    return phone;
+  }
+
+  if (phone.startsWith("0") && phone.length === 10) {
+    return `966${phone.slice(1)}`;
+  }
+
+  if (phone.startsWith("5") && phone.length === 9) {
+    return `966${phone}`;
+  }
+
+  return phone;
+}
+
+function parseImportDebtAmount(value) {
+  const raw = normalizeArabicDigits(value)
+    .replace(/ريال|ر\.س|sar/gi, "")
+    .trim();
+  let normalized = raw.replace(/\s+/g, "");
+
+  if (/^\d+,\d{1,2}$/.test(normalized)) {
+    normalized = normalized.replace(",", ".");
+  } else {
+    normalized = normalized.replace(/[٬,]/g, "");
+  }
+
+  const amount = Number(normalized);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new ApiError(400, "مبلغ المديونية غير صحيح");
+  }
+
+  return normalized;
+}
+
+function parseExcelSerialDate(value) {
+  const serial = Number(value);
+
+  if (!Number.isFinite(serial) || serial < 1) {
+    return null;
+  }
+
+  const parsed = xlsx.SSF.parse_date_code(serial);
+
+  if (!parsed || !parsed.y || !parsed.m || !parsed.d) {
+    return null;
+  }
+
+  return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+}
+
+function parseImportDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  const text = normalizeArabicDigits(value).trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slashMatch) {
+    const day = Number(slashMatch[1]);
+    const month = Number(slashMatch[2]);
+    const rawYear = Number(slashMatch[3]);
+    const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+    const date = new Date(Date.UTC(year, month - 1, day));
+
+    if (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    ) {
+      return date;
+    }
+
+    return null;
+  }
+
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const serialDate = parseExcelSerialDate(text);
+    if (serialDate) {
+      return serialDate;
+    }
+  }
+
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseImportDebtYear(value) {
+  const text = normalizeArabicDigits(value).trim();
+
+  const yearMatch = text.match(/\d{4}/);
+  if (yearMatch) {
+    return Number(yearMatch[0]);
+  }
+
+  const date = parseImportDate(text);
+
+  if (date) {
+    return date.getUTCFullYear();
+  }
+
+  return Number(text);
+}
+
+function normalizeInvoiceStatusForImport(value, summary, rowNumber) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return {
+      status: "",
+      raw: ""
+    };
+  }
+
+  const key = normalizeImportKey(text);
+  const status = invoiceStatusImportValues[key] || text.toUpperCase();
+
+  if (["UNPAID", "PAID", "SCHEDULED", "DISPUTED", "CANCELLED"].includes(status)) {
+    return {
+      status,
+      raw: text
+    };
+  }
+
+  summary.warnings.push({
+    row: rowNumber,
+    reason: `حالة الفاتورة غير معروفة وتم حفظها في الملاحظات: ${text}`
+  });
+
+  return {
+    status: "UNPAID",
+    raw: text,
+    unknown: true
+  };
+}
+
+function buildImportNotes(rowData, invoiceInfo) {
+  const lines = [];
+
+  if (rowData.notes) {
+    lines.push(rowData.notes);
+  }
+
+  if (rowData.followUpStatus) {
+    lines.push(`المتابعة: ${rowData.followUpStatus}`);
+  }
+
+  if (rowData.sourceUsername) {
+    lines.push(`اسم المستخدم: ${rowData.sourceUsername}`);
+  }
+
+  if (invoiceInfo.unknown && invoiceInfo.raw) {
+    lines.push(`حالة الفاتورة الأصلية: ${invoiceInfo.raw}`);
+  }
+
+  return lines.length ? lines.join("\n") : null;
 }
 
 async function findAssignedEmployee({ collectorName, assignedEmployeeCode, assignedEmployeeId, assignedEmployeeEmail }, user) {
@@ -146,6 +408,20 @@ async function findAssignedEmployee({ collectorName, assignedEmployeeCode, assig
     });
   }
 
+  if (!employee && collectorName) {
+    const normalizedCollectorName = normalizeImportKey(collectorName);
+    const candidates = await prisma.user.findMany({
+      where: {
+        role: "EMPLOYEE",
+        isActive: true
+      },
+      take: 500,
+      select: { id: true, email: true, employeeCode: true, name: true, role: true, supervisorId: true }
+    });
+
+    employee = candidates.find((candidate) => normalizeImportKey(candidate.name) === normalizedCollectorName) || null;
+  }
+
   if (!employee) {
     return null;
   }
@@ -176,6 +452,8 @@ function buildRowData(row, headerMap) {
       .filter(Boolean),
     notes: getCell(row, headerMap, "notes"),
     collectorName: getCell(row, headerMap, "collectorName"),
+    sourceUsername: getCell(row, headerMap, "sourceUsername"),
+    followUpStatus: getCell(row, headerMap, "followUpStatus"),
     assignedEmployeeCode: getCell(row, headerMap, "assignedEmployeeCode"),
     assignedEmployeeEmail: getCell(row, headerMap, "assignedEmployeeEmail"),
     assignedEmployeeId: getCell(row, headerMap, "assignedEmployeeId")
@@ -203,25 +481,39 @@ function validateRow(rowData) {
   }
 
   if (rowData.primaryPhone) {
-    try {
-      const phone = normalizePhone(rowData.primaryPhone);
-      if (phone.length < 6) {
-        errors.push("رقم الهاتف الرئيسي غير صالح");
-      }
-    } catch (error) {
+    const phone = normalizeSaudiPhone(rowData.primaryPhone);
+    if (phone.length < 6) {
       errors.push("رقم الهاتف الرئيسي غير صالح");
     }
   }
 
   for (const phoneInput of rowData.secondaryPhones) {
-    try {
-      const phone = normalizePhone(phoneInput);
-      if (phone.length < 6) {
-        errors.push(`رقم هاتف فرعي غير صالح: ${phoneInput}`);
-      }
-    } catch (error) {
+    const phone = normalizeSaudiPhone(phoneInput);
+    if (phone.length < 6) {
       errors.push(`رقم هاتف فرعي غير صالح: ${phoneInput}`);
     }
+  }
+
+  if (rowData.debtAmount) {
+    try {
+      parseImportDebtAmount(rowData.debtAmount);
+    } catch (error) {
+      errors.push(error.message || "مبلغ المديونية غير صحيح");
+    }
+  }
+
+  for (const [field, message] of [
+    ["serviceActivationDate", "تاريخ تفعيل الخدمة غير صحيح"],
+    ["serviceTerminationDate", "تاريخ انتهاء الخدمة غير صحيح"]
+  ]) {
+    if (rowData[field] && !parseImportDate(rowData[field])) {
+      errors.push(message);
+    }
+  }
+
+  const importedYear = parseImportDebtYear(rowData.debtYear);
+  if (rowData.debtYear && (!Number.isInteger(importedYear) || importedYear < 2000 || importedYear > new Date().getFullYear())) {
+    errors.push("سنة المديونية يجب أن تكون بين 2000 والسنة الحالية.");
   }
 
   return errors;
@@ -231,7 +523,6 @@ async function findExistingCustomer(user, rowData, primaryPhone) {
   const where = {
     ...customerAccessWhere(user),
     OR: [
-      { accountNumber: rowData.accountNumber },
       { nationalId: rowData.nationalId },
       { phone: primaryPhone },
       { phones: { some: { phoneNumber: primaryPhone } } }
@@ -244,23 +535,23 @@ async function findExistingCustomer(user, rowData, primaryPhone) {
   });
 }
 
-async function importCustomersFromCsv(file, user) {
+async function importCustomersFromFile(file, user) {
   if (!file) {
-    throw new ApiError(400, "ملف CSV مطلوب");
+    throw new ApiError(400, "ملف العملاء مطلوب");
   }
 
-  const records = parseCsv(file.buffer);
+  const records = parseImportFile(file);
   const firstDataRowIndex = records.findIndex((row) => Array.isArray(row) && !isEmptyRow(row));
 
   if (firstDataRowIndex === -1) {
-    throw new ApiError(400, "ملف CSV فارغ");
+    throw new ApiError(400, "ملف العملاء فارغ");
   }
 
   const headers = records[firstDataRowIndex];
   const headerMap = createHeaderMap(headers);
 
   if (headerMap.fullName === undefined || headerMap.primaryPhone === undefined) {
-    throw new ApiError(400, "يجب أن يحتوي ملف CSV على أعمدة اسم العميل ورقم الهاتف الرئيسي");
+    throw new ApiError(400, "يجب أن يحتوي ملف العملاء على أعمدة اسم العميل والرقم الرئيسي");
   }
 
   const summary = {
@@ -269,7 +560,15 @@ async function importCustomersFromCsv(file, user) {
     updated: 0,
     skipped: 0,
     assigned: 0,
+    unassigned: 0,
+    warnings: [],
     errors: []
+    ,customersCreated: 0
+    ,customersUpdated: 0
+    ,debtsCreated: 0
+    ,debtsUpdated: 0
+    ,duplicateDebtRows: 0
+    ,failedRows: 0
   };
 
   for (let index = firstDataRowIndex + 1; index < records.length; index += 1) {
@@ -302,52 +601,76 @@ async function importCustomersFromCsv(file, user) {
     const employee = await findAssignedEmployee(rowData, user);
 
     if (requestedAssignment && !employee) {
-      summary.skipped += 1;
-      summary.errors.push({
+      summary.warnings.push({
         row: rowNumber,
-        reason: "لم يتم العثور على المحصل المطلوب"
+        reason: `لم يتم العثور على المحصل "${rowData.collectorName || rowData.assignedEmployeeCode || rowData.assignedEmployeeEmail || rowData.assignedEmployeeId}"، وتم استيراد العميل بدون إسناد`
       });
-      continue;
     }
 
-    const primaryPhone = normalizePhone(rowData.primaryPhone);
+    const primaryPhone = normalizeSaudiPhone(rowData.primaryPhone);
+    const invoiceInfo = normalizeInvoiceStatusForImport(rowData.invoiceStatus, summary, rowNumber);
     const payload = {
       fullName: rowData.fullName,
       nationalId: rowData.nationalId,
       accountNumber: rowData.accountNumber,
-      projectName: rowData.projectName,
-      debtAmount: rowData.debtAmount,
+      projectName: normalizeProjectName(rowData.projectName),
+      projectNameRaw: rowData.projectName,
+      debtAmount: parseImportDebtAmount(rowData.debtAmount),
       serviceNumber: rowData.serviceNumber,
-      serviceActivationDate: rowData.serviceActivationDate || null,
-      serviceTerminationDate: rowData.serviceTerminationDate || null,
-      invoiceStatus: rowData.invoiceStatus,
+      serviceActivationDate: parseImportDate(rowData.serviceActivationDate),
+      serviceTerminationDate: parseImportDate(rowData.serviceTerminationDate),
+      invoiceStatus: invoiceInfo.status,
       collectionStatus: rowData.collectionStatus || undefined,
       paidAt: rowData.paidAt || undefined,
       paidAmount: rowData.paidAmount || undefined,
       paymentReference: rowData.paymentReference || undefined,
       paymentNotes: rowData.paymentNotes || undefined,
-      debtYear: rowData.debtYear,
+      debtYear: parseImportDebtYear(rowData.debtYear),
       primaryPhone,
-      secondaryPhones: rowData.secondaryPhones,
-      notes: rowData.notes || null,
-      ...(employee ? { assignedEmployeeId: employee.id } : {})
+      secondaryPhones: rowData.secondaryPhones.map(normalizeSaudiPhone).filter(Boolean),
+      notes: buildImportNotes(rowData, invoiceInfo),
+      ...(employee ? { assignedEmployeeId: employee.id } : requestedAssignment ? { assignedEmployeeId: null } : {})
     };
 
     try {
       const existing = await findExistingCustomer(user, rowData, primaryPhone);
+      let savedCustomer = null;
+
       if (existing) {
-        await updateCustomer(existing.id, user, payload);
+        const debtPayload = {
+          projectName: payload.projectName, projectNameRaw: payload.projectNameRaw,
+          accountNumber: payload.accountNumber, serviceNumber: payload.serviceNumber,
+          debtYear: payload.debtYear, debtAmount: payload.debtAmount,
+          invoiceStatus: payload.invoiceStatus, collectionStatus: payload.collectionStatus,
+          serviceActivationDate: payload.serviceActivationDate, serviceTerminationDate: payload.serviceTerminationDate,
+          paidAt: payload.paidAt, paidAmount: payload.paidAmount,
+          paymentReference: payload.paymentReference, paymentNotes: payload.paymentNotes
+        };
+        try {
+          await createDebt(existing.id, user, debtPayload);
+          summary.debtsCreated += 1;
+        } catch (error) {
+          if (error.statusCode === 409 || error.status === 409) summary.duplicateDebtRows += 1;
+          else throw error;
+        }
+        savedCustomer = await prisma.customer.findUnique({ where: { id: existing.id } });
         summary.updated += 1;
+        summary.customersUpdated += 1;
       } else {
-        await createCustomer(user, payload);
+        savedCustomer = await createCustomer(user, payload);
         summary.created += 1;
+        summary.customersCreated += 1;
+        summary.debtsCreated += 1;
       }
 
-      if (employee) {
+      if (savedCustomer && (savedCustomer.assignedEmployeeId || savedCustomer.assignedToId)) {
         summary.assigned += 1;
+      } else {
+        summary.unassigned += 1;
       }
     } catch (error) {
       summary.skipped += 1;
+      summary.failedRows += 1;
       summary.errors.push({
         row: rowNumber,
         reason: error.message || "تعذر حفظ العميل"
@@ -358,6 +681,11 @@ async function importCustomersFromCsv(file, user) {
   return summary;
 }
 
+async function importCustomersFromCsv(file, user) {
+  return importCustomersFromFile(file, user);
+}
+
 module.exports = {
-  importCustomersFromCsv
+  importCustomersFromCsv,
+  importCustomersFromFile
 };

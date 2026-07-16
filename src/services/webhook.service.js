@@ -9,6 +9,10 @@ const {
 const conversationService = require("./conversation.service");
 const mediaService = require("./media.service");
 const { notifyInboundMessage, notifyMessageStatus } = require("../socket");
+const {
+  WHATSAPP_24H_TEXT_REJECTION_MESSAGE,
+  isWhatsAppTextWindowError
+} = require("../utils/whatsappErrors");
 
 const statusMap = {
   sent: "SENT",
@@ -21,12 +25,17 @@ const typeMap = {
   text: "TEXT",
   image: "IMAGE",
   audio: "AUDIO",
+  voice: "VOICE",
   video: "VIDEO",
   document: "DOCUMENT",
   sticker: "STICKER",
   interactive: "INTERACTIVE",
-  button: "INTERACTIVE"
+  button: "INTERACTIVE",
+  system: "SYSTEM",
+  unsupported: "UNKNOWN"
 };
+
+const unsupportedInboundMessageBody = "رسالة غير مدعومة من واتساب";
 
 function mapStatus(status) {
   return statusMap[status] || "QUEUED";
@@ -48,43 +57,189 @@ function timestampToDate(timestamp) {
   return new Date(Number(timestamp) * 1000);
 }
 
+function asTrimmedText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const text = asTrimmedText(value);
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+const readableTextKeys = [
+  "body",
+  "text",
+  "title",
+  "description",
+  "payload",
+  "caption",
+  "filename",
+  "name",
+  "formatted_name",
+  "first_name",
+  "last_name",
+  "emoji",
+  "message",
+  "details",
+  "headline"
+];
+
+const nonContentKeys = new Set([
+  "errors",
+  "error_data",
+  "unsupported",
+  "metadata",
+  "messaging_product",
+  "id",
+  "from",
+  "to",
+  "type",
+  "timestamp",
+  "from_user_id",
+  "wa_id",
+  "user_id",
+  "phone_number_id",
+  "display_phone_number",
+  "mime_type",
+  "sha256"
+]);
+
+function shouldSkipReadableKey(key) {
+  const normalized = String(key || "").toLowerCase();
+
+  return nonContentKeys.has(normalized) || normalized.endsWith("_id");
+}
+
+function extractReadableText(value, seen = new Set()) {
+  const directText = asTrimmedText(value);
+
+  if (directText) {
+    return directText;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (seen.has(value)) {
+    return null;
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const text = extractReadableText(item, seen);
+
+      if (text) {
+        return text;
+      }
+    }
+
+    return null;
+  }
+
+  for (const key of readableTextKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key) && !shouldSkipReadableKey(key)) {
+      const text = extractReadableText(value[key], seen);
+
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (shouldSkipReadableKey(key)) {
+      continue;
+    }
+
+    const text = extractReadableText(item, seen);
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function getInteractiveContent(interactive) {
+  if (!interactive || typeof interactive !== "object") {
+    return null;
+  }
+
+  const buttonReply = interactive.button_reply;
+  const listReply = interactive.list_reply;
+  const flowReply = interactive.nfm_reply;
+
+  return firstText(
+    buttonReply && buttonReply.title,
+    buttonReply && buttonReply.body,
+    buttonReply && buttonReply.description,
+    listReply && listReply.title,
+    listReply && listReply.body,
+    listReply && listReply.description,
+    flowReply && flowReply.title,
+    flowReply && flowReply.body,
+    flowReply && flowReply.response_json
+  ) || extractReadableText(interactive);
+}
+
 function getInboundContent(message) {
-  if (message.text && message.text.body) {
-    return message.text.body;
+  if (!message || typeof message !== "object") {
+    return unsupportedInboundMessageBody;
   }
 
-  if (message.button && message.button.text) {
-    return message.button.text;
+  if (message.type === "text") {
+    return firstText(message.text && message.text.body) || unsupportedInboundMessageBody;
   }
 
-  if (message.interactive) {
-    if (message.interactive.button_reply) {
-      return message.interactive.button_reply.title;
-    }
+  if (message.type === "button") {
+    return firstText(
+      message.button && message.button.text,
+      message.button && message.button.payload
+    ) || unsupportedInboundMessageBody;
+  }
 
-    if (message.interactive.list_reply) {
-      return message.interactive.list_reply.title;
-    }
+  if (message.type === "interactive") {
+    return getInteractiveContent(message.interactive) || unsupportedInboundMessageBody;
+  }
+
+  if (message.type === "unsupported") {
+    return unsupportedInboundMessageBody;
   }
 
   if (message.image) {
-    return message.image.caption || "[image]";
+    return firstText(message.image.caption);
   }
 
   if (message.video) {
-    return message.video.caption || "[video]";
+    return firstText(message.video.caption);
   }
 
   if (message.document) {
-    return message.document.caption || message.document.filename || "[document]";
+    return firstText(message.document.caption);
   }
 
-  if (message.audio) {
-    return "[audio]";
+  if (message.audio || message.voice) {
+    return null;
   }
 
   if (message.sticker) {
-    return "[sticker]";
+    return null;
   }
 
   if (message.location) {
@@ -100,7 +255,15 @@ function getInboundContent(message) {
     return message.reaction.emoji || "[reaction]";
   }
 
-  return null;
+  if (message.system) {
+    return extractReadableText(message.system) || unsupportedInboundMessageBody;
+  }
+
+  if (message.referral) {
+    return extractReadableText(message.referral) || unsupportedInboundMessageBody;
+  }
+
+  return extractReadableText(message) || unsupportedInboundMessageBody;
 }
 
 function getContactByWaId(contacts, waId) {
@@ -116,6 +279,8 @@ function yesNo(value) {
 }
 
 function createInboundDebugState(message, context = {}) {
+  const extractedBody = message ? getInboundContent(message) : null;
+
   return {
     timestamp: new Date().toISOString(),
     webhookField: context.webhookField || "messages",
@@ -124,7 +289,9 @@ function createInboundDebugState(message, context = {}) {
     normalizedPhone: null,
     whatsappMessageId: message && message.id ? message.id : null,
     messageType: message && message.type ? message.type : null,
-    messageText: message ? getInboundContent(message) : null,
+    availableKeys: message && typeof message === "object" ? Object.keys(message) : [],
+    messageText: extractedBody,
+    extractedBody,
     customerFound: "PENDING",
     conversationFound: "PENDING",
     messageCreated: "PENDING",
@@ -185,6 +352,7 @@ async function findOrCreateInboundCustomer(message, contact, debugState) {
           debtAmount: 0,
           serviceNumber: phone,
           invoiceStatus: "UNPAID",
+          source: "WHATSAPP",
           debtYear: new Date().getFullYear(),
           whatsappProfileName: profileName || null,
           phones: {
@@ -389,7 +557,7 @@ async function processInboundMessage(message, contacts, context = {}) {
   let existingConversation = null;
   if (logger.isDebugMode) {
     existingConversation = await prisma.conversation.findUnique({
-      where: { customerId: customer.id },
+      where: { activeKey: customer.id },
       select: {
         id: true,
         customerId: true,
@@ -446,11 +614,43 @@ async function processInboundMessage(message, contacts, context = {}) {
     conversationId: conversation.id,
     assignedToId: conversation.assignedEmployeeId || null
   }, "Resolved conversation for inbound WhatsApp message");
+  const extractedInboundMedia = mediaService.extractInboundMedia(message);
+
+  if (extractedInboundMedia && extractedInboundMedia.messageType === "IMAGE") {
+    logger.debugStep("Inbound image media id extracted", {
+      webhookEventId: debugState.webhookEventId,
+      whatsappMessageId: message.id,
+      mediaId: extractedInboundMedia.mediaId,
+      mimeType: extractedInboundMedia.mimeType,
+      caption: extractedInboundMedia.caption
+    });
+  }
+
   const inboundMedia = await mediaService.downloadInboundMedia(
-    mediaService.extractInboundMedia(message)
+    extractedInboundMedia
   );
-  const content = getInboundContent(message) || (inboundMedia && inboundMedia.caption) || null;
+  const content = inboundMedia ? inboundMedia.caption || null : getInboundContent(message);
   const messageAt = timestampToDate(message.timestamp);
+  const availableKeys = message && typeof message === "object" ? Object.keys(message) : [];
+
+  debugState.messageText = content;
+  debugState.availableKeys = availableKeys;
+  debugState.extractedBody = content;
+
+  logger.info({
+    whatsappMessageId: message.id,
+    inboundType: message.type || "unknown",
+    availableKeys,
+    extractedBody: content
+  }, "Extracted inbound WhatsApp message body");
+
+  logger.debugStep("Inbound message body extracted", {
+    webhookEventId: debugState.webhookEventId,
+    whatsappMessageId: message.id,
+    inboundType: message.type || "unknown",
+    availableKeys,
+    extractedBody: content
+  });
 
   try {
     logger.debugStep("Creating message...", {
@@ -502,6 +702,10 @@ async function processInboundMessage(message, contacts, context = {}) {
       conversationId: conversation.id,
       direction: created.direction,
       type: created.type,
+      mediaId: created.mediaId,
+      mediaUrl: created.mediaUrl,
+      mimeType: created.mimeType,
+      fileSize: created.fileSize,
       status: created.status
     });
 
@@ -530,8 +734,10 @@ async function processInboundMessage(message, contacts, context = {}) {
       unreadCount: updatedConversation.unreadCount
     }, "Created inbound WhatsApp message record");
 
-    const socketResult = notifyInboundMessage(created.customer, created, updatedConversation);
-    debugState.socketEmitted = yesNo(Boolean(socketResult && socketResult.emitted));
+    const socketResult = await notifyInboundMessage(created.customer, created, updatedConversation);
+    debugState.socketEmitted = socketResult && socketResult.published && !socketResult.emitted
+      ? "PUBLISHED"
+      : yesNo(Boolean(socketResult && socketResult.emitted));
 
     logger.debugStep(`Socket emitted: ${debugState.socketEmitted}`, {
       webhookEventId: debugState.webhookEventId,
@@ -631,18 +837,24 @@ async function processStatus(status) {
   };
 
   if (status.errors && status.errors.length > 0) {
-    data.error = status.errors.map((item) => item.message || item.title || item.code).join("; ");
+    data.error = status.errors.some((item) => isWhatsAppTextWindowError(item))
+      ? WHATSAPP_24H_TEXT_REJECTION_MESSAGE
+      : status.errors.map((item) => item.message || item.title || item.code).join("; ");
   }
 
   const message = await prisma.message.update({
     where: { id: existing.id },
     data,
     include: {
-      customer: true
+      customer: {
+        include: {
+          assignedTo: { select: assignedUserSelect }
+        }
+      }
     }
   });
 
-  notifyMessageStatus(message);
+  await notifyMessageStatus(message);
 
   logger.info({
     whatsappMessageId: status.id,
@@ -741,5 +953,8 @@ async function processWebhook(body) {
 module.exports = {
   processWebhook,
   processInboundMessage,
-  processStatus
+  processStatus,
+  getInboundContent,
+  extractReadableText,
+  unsupportedInboundMessageBody
 };

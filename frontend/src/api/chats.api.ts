@@ -4,6 +4,7 @@ import type {
   Conversation,
   ConversationPriority,
   ConversationStatus,
+  Customer,
   Message,
   Paginated,
   QueueJob
@@ -33,9 +34,24 @@ export async function sendTextMessage(customerId: string, text: string) {
   );
 }
 
+export async function quickSendMessage(payload: {
+  phone: string;
+  message: string;
+  assignedToId?: string;
+}) {
+  return unwrap<{
+    customer: Customer;
+    conversation: Conversation;
+    message: Message;
+    job: QueueJob;
+  }>(
+    await api.post("/api/chats/quick-send", payload)
+  );
+}
+
 export async function sendMediaMessage(customerId: string, data: {
   file: File;
-  type: "image" | "audio" | "voice" | "document";
+  type: "image" | "audio" | "voice" | "video" | "document";
   caption?: string;
 }) {
   const form = new FormData();

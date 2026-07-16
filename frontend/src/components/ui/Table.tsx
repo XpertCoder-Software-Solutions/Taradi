@@ -32,9 +32,9 @@ export function TableRow({ children, className }: { children: ReactNode; classNa
 }
 
 export function TableCell({ children, className }: { children: ReactNode; className?: string }) {
-  return <td className={cn("px-5 py-4 align-middle", className)}>{children}</td>;
+  return <td className={cn("whitespace-nowrap px-5 py-4 align-middle", className)}>{children}</td>;
 }
 
 export function TableHeaderCell({ children, className }: { children: ReactNode; className?: string }) {
-  return <th className={cn("px-5 py-3 align-middle", className)}>{children}</th>;
+  return <th className={cn("whitespace-nowrap px-5 py-3 align-middle", className)}>{children}</th>;
 }
