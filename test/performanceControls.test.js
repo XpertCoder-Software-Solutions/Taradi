@@ -22,8 +22,7 @@ const {
 } = require("../src/services/webhookProcessor.service");
 const {
   createRateLimiter,
-  closeRateLimiter,
-  generalApiLimiter
+  closeRateLimiter
 } = require("../src/middleware/rateLimit.middleware");
 
 function createMockResponse() {
@@ -143,23 +142,9 @@ test("rate limiter falls back to the local store when Redis is disabled", async 
   assert.equal(third.res.body.message, "Too many requests");
 });
 
-test("general API limiter skips async campaign preview, creation, and progress endpoints", async () => {
-  const requests = [
-    { method: "POST", originalUrl: "/api/whatsapp/templates/bulk/preview" },
-    { method: "POST", originalUrl: "/api/whatsapp/templates/bulk" },
-    { method: "GET", originalUrl: "/api/whatsapp/templates/bulk/00000000-0000-4000-8000-000000000000" }
-  ];
+test("rate limiter module does not expose global API or auth limiters", () => {
+  const rateLimiters = require("../src/middleware/rateLimit.middleware");
 
-  for (const request of requests) {
-    const res = createMockResponse();
-    const result = await invokeMiddleware(generalApiLimiter, {
-      ip: "127.0.0.1",
-      socket: { remoteAddress: "127.0.0.1" },
-      ...request
-    }, res);
-
-    assert.equal(result.nextCalled, true);
-    assert.equal(res.headers["X-RateLimit-Policy"], undefined);
-    assert.equal(res.statusCode, 200);
-  }
+  assert.equal(rateLimiters.generalApiLimiter, undefined);
+  assert.equal(rateLimiters.authLimiter, undefined);
 });

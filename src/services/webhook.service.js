@@ -13,6 +13,8 @@ const {
   WHATSAPP_24H_TEXT_REJECTION_MESSAGE,
   isWhatsAppTextWindowError
 } = require("../utils/whatsappErrors");
+const { isOptOutPhrase, applyInboundOptOut } = require("./customer-communication-preferences.service");
+const { refreshCampaignRecipientCounts, evaluateAutoPause } = require("./campaign-send.service");
 
 const statusMap = {
   sent: "SENT",
@@ -716,6 +718,10 @@ async function processInboundMessage(message, contacts, context = {}) {
       direction: "INBOUND"
     });
 
+    if (isOptOutPhrase(content)) {
+      await applyInboundOptOut(customer.id, message.id, content);
+    }
+
     logger.debugStep("Updated unread count:", {
       webhookEventId: debugState.webhookEventId,
       conversationId: updatedConversation.id,
@@ -853,6 +859,22 @@ async function processStatus(status) {
       }
     }
   });
+
+  if (message.campaignId) {
+    const recipientStatus = ["SENT", "DELIVERED", "READ", "FAILED"].includes(message.status) ? message.status : null;
+    if (recipientStatus) {
+      await prisma.campaignRecipient.updateMany({
+        where: { campaignId: message.campaignId, messageId: message.id },
+        data: {
+          status: recipientStatus,
+          sendStatus: message.status,
+          ...(recipientStatus === "FAILED" ? { failedAt: new Date(), errorMessage: data.error || null } : {})
+        }
+      });
+      if (recipientStatus === "FAILED") await evaluateAutoPause(message.campaignId);
+      await refreshCampaignRecipientCounts(message.campaignId);
+    }
+  }
 
   await notifyMessageStatus(message);
 

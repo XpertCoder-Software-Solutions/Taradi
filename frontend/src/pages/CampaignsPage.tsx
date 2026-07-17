@@ -16,8 +16,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   createBulkCampaign,
+  cancelCampaign,
   getCampaignProgress,
+  getCampaignFailures,
+  getSkippedRecipients,
+  pauseCampaign,
   previewBulkCampaign,
+  resumeCampaign,
+  startCampaign,
   type CampaignProgress,
   type CampaignPreviewResponse
 } from "../api/campaigns.api";
@@ -62,6 +68,7 @@ const statusTone: Record<string, "green" | "amber" | "red" | "neutral"> = {
 const campaignStatusLabel: Record<string, string> = {
   DRAFT: "مسودة",
   PREPARING: "جاري التجهيز",
+  SCHEDULED: "مجدولة",
   READY: "جاهزة",
   QUEUED: "في قائمة الانتظار",
   RUNNING: "قيد الإرسال",
@@ -238,6 +245,7 @@ export function CampaignsPage() {
   const [preview, setPreview] = useState<CampaignPreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<unknown>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewPayloadKeyRef = useRef("");
@@ -349,6 +357,16 @@ export function CampaignsPage() {
 
       return status && terminalCampaignStatuses.has(status) ? false : 5000;
     }
+  });
+  const skippedRecipientsQuery = useQuery({
+    queryKey: ["campaign-skipped", activeCampaignId],
+    queryFn: () => getSkippedRecipients(activeCampaignId || ""),
+    enabled: Boolean(activeCampaignId && (campaignProgressQuery.data?.skipped || lastResult?.skipped))
+  });
+  const campaignFailuresQuery = useQuery({
+    queryKey: ["campaign-failures", activeCampaignId],
+    queryFn: () => getCampaignFailures(activeCampaignId || ""),
+    enabled: Boolean(activeCampaignId && (campaignProgressQuery.data?.failed || lastResult?.failed))
   });
 
   useEffect(() => {
@@ -468,9 +486,14 @@ export function CampaignsPage() {
       return "لا يوجد عملاء مؤهلون للإرسال";
     }
 
+    if (!consentConfirmed) {
+      return "يجب تأكيد وجود موافقة صالحة لدى جميع المستلمين";
+    }
+
     return null;
   }, [
     canLoadPreview,
+    consentConfirmed,
     hasCustomerSelection,
     mappingComplete,
     mappingMessage,
@@ -506,6 +529,18 @@ export function CampaignsPage() {
     onError: (error) => pushToast({ title: "تعذر تجهيز الحملة", description: translateApiError(error), tone: "error" })
   });
 
+  const controlMutation = useMutation({
+    mutationFn: async (action: "start" | "pause" | "resume" | "cancel") => {
+      if (!activeCampaignId) throw new Error("Campaign is not selected");
+      if (action === "start") return startCampaign(activeCampaignId);
+      if (action === "pause") return pauseCampaign(activeCampaignId, "Paused from campaign dashboard");
+      if (action === "resume") return resumeCampaign(activeCampaignId);
+      return cancelCampaign(activeCampaignId, "Cancelled from campaign dashboard");
+    },
+    onSuccess: () => campaignProgressQuery.refetch(),
+    onError: (error) => pushToast({ title: "تعذر تحديث الحملة", description: translateApiError(error), tone: "error" })
+  });
+
   function selectTemplate(template: WhatsappTemplate) {
     if (template.status !== "APPROVED") {
       setValidationError("لا يمكن اختيار قالب غير معتمد للإرسال");
@@ -524,6 +559,7 @@ export function CampaignsPage() {
     }
 
     setValidationError(null);
+    if (metrics.estimated >= 500 && !window.confirm(`هذه حملة كبيرة تضم ${metrics.estimated} مستلمًا مؤهلًا. هل تريد المتابعة؟`)) return;
     campaignMutation.mutate();
   }
 
@@ -697,6 +733,11 @@ export function CampaignsPage() {
                 </div>
               ) : null}
 
+              <label className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+                <input type="checkbox" className="mt-1 h-4 w-4" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} />
+                أؤكد أن المستلمين لديهم موافقة واتساب صالحة، وأن هذه الحملة تستخدم قالبًا معتمدًا فقط.
+              </label>
+
               {canSendCampaign ? (
                 <Button
                   className="w-full"
@@ -743,6 +784,10 @@ export function CampaignsPage() {
                     <p className="text-sm font-bold text-mint-800">مؤهلون</p>
                     <p className="mt-2 text-3xl font-black text-ink-900">{campaignProgress.eligible}</p>
                   </div>
+                  <div className="rounded-2xl bg-violet-50 p-4">
+                    <p className="text-sm font-bold text-violet-700">قيد المعالجة</p>
+                    <p className="mt-2 text-3xl font-black text-ink-900">{campaignProgress.processing || 0}</p>
+                  </div>
                   <div className="rounded-2xl bg-mint-50 p-4">
                     <p className="text-sm font-bold text-mint-800">في قائمة الإرسال</p>
                     <p className="mt-2 text-3xl font-black text-ink-900">{campaignProgress.queued}</p>
@@ -759,11 +804,41 @@ export function CampaignsPage() {
                     <p className="text-sm font-bold text-amber-800">مستبعدون</p>
                     <p className="mt-2 text-3xl font-black text-ink-900">{campaignProgress.skipped}</p>
                   </div>
+                  <div className="rounded-2xl bg-surface-100 p-4">
+                    <p className="text-sm font-bold text-ink-600">ملغاة</p>
+                    <p className="mt-2 text-3xl font-black text-ink-900">{campaignProgress.cancelled || 0}</p>
+                  </div>
                 </div>
 
-                {campaignProgress.error ? (
+                <div className="mt-4 rounded-2xl border border-surface-200 bg-white px-4 py-3 text-sm font-bold text-ink-700">
+                  معدل الإرسال: {campaignProgress.rateLimitPerMinute || 20} رسالة/دقيقة · الدفعة: {campaignProgress.batchSize || 50} · المدة التقديرية: {Math.max(1, Math.ceil(campaignProgress.eligible / Math.max(1, campaignProgress.rateLimitPerMinute || 20)))} دقيقة
+                  {campaignProgress.phoneNumberId ? <span className="mt-1 block" dir="ltr">Phone ID: {campaignProgress.phoneNumberId}</span> : null}
+                  <span className="mt-1 block">حالة الحساب: {campaignProgress.phoneAccountStatus || "UNKNOWN"} · الجودة: {campaignProgress.phoneQualityStatus || "UNKNOWN"}</span>
+                  {campaignProgress.phoneDisabledReason ? <span className="mt-1 block text-red-700">{campaignProgress.phoneDisabledReason}</span> : null}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {["DRAFT", "READY"].includes(campaignProgress.status) ? <Button disabled={controlMutation.isPending || campaignProgress.campaignsEnabled === false || ["RESTRICTED", "DISABLED", "BANNED"].includes(campaignProgress.phoneAccountStatus || "UNKNOWN")} onClick={() => controlMutation.mutate("start")}>بدء</Button> : null}
+                  {["SCHEDULED", "RUNNING"].includes(campaignProgress.status) ? <Button variant="secondary" disabled={controlMutation.isPending} onClick={() => controlMutation.mutate("pause")}>إيقاف مؤقت</Button> : null}
+                  {campaignProgress.status === "PAUSED" ? <Button disabled={controlMutation.isPending} onClick={() => controlMutation.mutate("resume")}>استئناف</Button> : null}
+                  {!terminalCampaignStatuses.has(campaignProgress.status) ? <Button variant="secondary" disabled={controlMutation.isPending} onClick={() => window.confirm("هل تريد إلغاء الحملة؟") && controlMutation.mutate("cancel")}>إلغاء</Button> : null}
+                </div>
+
+                {campaignProgress.pauseReason || campaignProgress.error ? (
                   <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-                    {campaignProgress.error}
+                    {campaignProgress.pauseReason || campaignProgress.error}
+                  </div>
+                ) : null}
+                {skippedRecipientsQuery.data?.items.length ? (
+                  <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4">
+                    <p className="font-black text-amber-900">أسباب الاستبعاد</p>
+                    {skippedRecipientsQuery.data.items.slice(0, 10).map((item) => <p key={item.id} className="mt-2 text-sm text-amber-900">{item.customer.fullName}: {item.skipReason || "غير مؤهل"}</p>)}
+                  </div>
+                ) : null}
+                {campaignFailuresQuery.data?.items.length ? (
+                  <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
+                    <p className="font-black text-red-800">أخطاء الإرسال</p>
+                    {campaignFailuresQuery.data.items.slice(0, 10).map((item) => <p key={item.id} className="mt-2 text-sm text-red-800">{item.customer.fullName}: {item.errorCategory || "FAILED"} — {item.errorMessage || "تعذر الإرسال"}</p>)}
                   </div>
                 ) : null}
               </CardBody>

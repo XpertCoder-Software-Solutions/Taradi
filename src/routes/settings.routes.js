@@ -10,5 +10,7 @@ router.use(requireRole("ADMIN"));
 
 router.get("/permissions", settingsController.getPermissions);
 router.patch("/permissions", settingsController.updatePermissions);
+router.get("/campaign-safety", settingsController.getCampaignSafety);
+router.patch("/campaign-safety", settingsController.updateCampaignSafety);
 
 module.exports = router;

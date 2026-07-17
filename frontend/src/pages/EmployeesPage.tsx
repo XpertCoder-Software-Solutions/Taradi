@@ -512,7 +512,7 @@ export function EmployeesPage() {
       const basePayload = {
         employeeName: values.employeeName,
         ...(values.password ? { password: values.password } : {}),
-        ...(editing ? { isActive: values.isActive } : {})
+        ...(editing && canToggle ? { isActive: values.isActive } : {})
       };
       const payload = role === "SUPERVISOR"
         ? {
@@ -596,8 +596,8 @@ export function EmployeesPage() {
   const hasLoadedEmployees = employeesQuery.isSuccess;
   const hasActiveSearch = Boolean(search || activeFilter || supervisorFilter);
   const canCreate = hasPermission("employees.create") || hasPermission("employees.view_team");
-  const canEdit = hasPermission("employees.edit") && isAdmin;
-  const canToggle = hasPermission("employees.activate_deactivate") && isAdmin;
+  const canEdit = hasPermission("employees.edit");
+  const canToggle = hasPermission("employees.activate_deactivate");
   const canImportEmployees = isAdmin || isSupervisor;
   const importErrors = importResult
     ? "failedRows" in importResult ? importResult.failedRows : importResult.errors
@@ -1123,7 +1123,7 @@ export function EmployeesPage() {
               placeholder={editing ? "اتركها فارغة إذا لم ترغب في تغييرها" : "كلمة المرور"}
             />
           </FieldShell>
-          {editing ? (
+          {editing && canToggle ? (
             <FieldShell label="الحالة">
               <PremiumSelect
                 value={form.watch("isActive") ? "true" : "false"}

@@ -24,6 +24,9 @@ const { friendlyWhatsAppFailureMessage } = require("../utils/whatsappErrors");
 const { notifyOutboundMessage, notifyMessageStatus } = require("../socket");
 const { enqueueOutboundMessage } = require("../queues/whatsapp.queue");
 const { enqueueCampaignPreparation } = require("../queues/campaign.queue");
+const { evaluateCampaignEligibility } = require("./campaign-eligibility.service");
+const { getCampaignSettings, ensureWhatsappPhoneNumber } = require("./campaign-settings.service");
+const { recordCampaignAudit } = require("./campaign-audit.service");
 const { CAMPAIGN_PREPARE_QUEUE, WHATSAPP_OUTBOUND_QUEUE } = require("../queues/whatsapp.constants");
 const { pathFromMediaUrl } = require("../utils/mediaStorage");
 const { safeRecordEmployeeActivity } = require("./employeeActivity.service");
@@ -1092,8 +1095,15 @@ function formatCampaign(campaign) {
     failed: campaign.failedCount,
     skipped: campaign.skippedCount,
     pending: campaign.pendingCount,
+    processing: campaign.processingCount || 0,
+    cancelled: campaign.cancelledCount || 0,
     progressPercentage,
     error: campaign.error || null,
+    pauseReason: campaign.pauseReason || null,
+    phoneNumberId: campaign.phoneNumberId || null,
+    rateLimitPerMinute: campaign.rateLimitPerMinute || null,
+    batchSize: campaign.batchSize || null,
+    batchDelayMs: campaign.batchDelayMs || null,
     createdAt: campaign.createdAt,
     updatedAt: campaign.updatedAt,
     startedAt: campaign.startedAt,
@@ -1105,6 +1115,16 @@ function formatCampaign(campaign) {
 async function refreshCampaignProgress(campaignId) {
   if (!campaignId) {
     return null;
+  }
+
+  const { refreshCampaignRecipientCounts } = require("./campaign-send.service");
+  const recipientCampaign = await refreshCampaignRecipientCounts(campaignId);
+  if (recipientCampaign) {
+    const [processingCount, cancelledCount] = await Promise.all([
+      prisma.campaignRecipient.count({ where: { campaignId, status: "PROCESSING" } }),
+      prisma.campaignRecipient.count({ where: { campaignId, status: "CANCELLED" } })
+    ]);
+    return formatCampaign({ ...recipientCampaign, processingCount, cancelledCount });
   }
 
   const campaign = await prisma.campaign.findUnique({
@@ -1166,7 +1186,17 @@ async function getCampaignProgress(user, campaignId) {
     throw new ApiError(404, "Campaign not found");
   }
 
-  return refreshCampaignProgress(campaign.id);
+  const [progress, phoneSafety] = await Promise.all([
+    refreshCampaignProgress(campaign.id),
+    campaign.phoneNumberId ? prisma.whatsappPhoneNumber.findUnique({ where: { phoneNumberId: campaign.phoneNumberId } }) : null
+  ]);
+  return {
+    ...progress,
+    phoneAccountStatus: phoneSafety && phoneSafety.accountStatus || "UNKNOWN",
+    phoneQualityStatus: phoneSafety && phoneSafety.qualityStatus || "UNKNOWN",
+    phoneDisabledReason: phoneSafety && phoneSafety.disabledReason || null,
+    campaignsEnabled: phoneSafety ? phoneSafety.campaignsEnabled : true
+  };
 }
 
 async function createCampaignMessages(rows) {
@@ -1212,95 +1242,70 @@ async function enqueueCampaignMessages(campaignId, messages) {
   return { enqueued, failed };
 }
 
-async function prepareCampaignCustomerBatch({ campaign, template, mappings, customers }) {
+async function prepareCampaignCustomerBatch({ campaign, template, mappings, customers, seenCustomerIds }) {
   const now = new Date();
-  const messageRows = [];
-  const skipped = [];
+  const recipientRows = [];
 
   const payload = campaign.rawPayload || {};
   const allowedDebtIds = new Set(selectedDebtIds(payload));
   for (const customer of customers) {
     const debts = (customer.debts || []).filter((debt) => debt.isActive && !excludedDebtIds(payload).includes(debt.id) && (!allowedDebtIds.size || allowedDebtIds.has(debt.id)));
     for (const debt of debts) {
-    const evaluated = evaluateCampaignRecipient(template, mappings, customer, debt);
-
-    if (!evaluated.eligible) {
-      skipped.push({
-        customerId: evaluated.customer.id,
-        debtId: debt.id,
-        reason: evaluated.reasons.join("، ")
+      const evaluated = evaluateCampaignRecipient(template, mappings, customer, debt);
+      const eligibility = await evaluateCampaignEligibility({
+        campaign,
+        customer,
+        template,
+        baseEvaluation: evaluated,
+        duplicate: seenCustomerIds.has(customer.id),
+        now
       });
-      continue;
-    }
-
-    messageRows.push({
-      customerId: customer.id,
-      debtId: debt.id,
-      campaignId: campaign.id,
-      direction: "OUTBOUND",
-      type: "TEMPLATE",
-      content: evaluated.renderedTemplate,
-      body: evaluated.renderedTemplate,
-      templateName: template.name,
-      status: "QUEUED",
-      sentByUserId: campaign.createdById || null,
-      rawPayload: {
-        templateId: template.id,
-        templateName: template.name,
-        languageCode: template.language,
-        category: template.category,
-        selectionMode: campaign.selectionMode,
-        components: evaluated.components,
-        recipientSnapshot: evaluated.snapshot,
-        queuedAt: now.toISOString()
-      },
-      statusUpdatedAt: now
-    });
-    }
-  }
-
-  const messages = await createCampaignMessages(messageRows);
-  for (const message of messages) {
-    const snapshot = message.rawPayload && message.rawPayload.recipientSnapshot;
-    const debtSnapshot = snapshot && snapshot.debt;
-    if (!message.debtId || !debtSnapshot) continue;
-    await prisma.campaignRecipient.upsert({
-      where: { campaignId_debtId: { campaignId: campaign.id, debtId: message.debtId } },
-      update: { messageId: message.id, sendStatus: message.status },
-      create: {
+      seenCustomerIds.add(customer.id);
+      const snapshot = evaluated.snapshot || {};
+      const debtSnapshot = snapshot.debt || debt;
+      recipientRows.push({
         campaignId: campaign.id,
-        customerId: message.customerId,
-        debtId: message.debtId,
-        phoneSnapshot: snapshot.customer.phone || null,
+        customerId: customer.id,
+        debtId: debt.id,
+        phoneSnapshot: eligibility.phone,
         projectSnapshot: debtSnapshot.projectName || null,
         accountNumberSnapshot: debtSnapshot.accountNumber || null,
         serviceNumberSnapshot: debtSnapshot.serviceNumber || null,
         debtYearSnapshot: debtSnapshot.debtYear || null,
         debtAmountSnapshot: debtSnapshot.debtAmount || null,
-        resolvedTemplateParameters: snapshot.resolvedVariables || [],
-        eligible: true,
-        sendStatus: message.status,
-        messageId: message.id
-      }
-    });
-  }
-  const enqueueResult = await enqueueCampaignMessages(campaign.id, messages);
-
-  await prisma.campaign.update({
-    where: { id: campaign.id },
-    data: {
-      eligibleCount: { increment: messages.length },
-      queuedCount: { increment: enqueueResult.enqueued },
-      failedCount: { increment: enqueueResult.failed },
-      skippedCount: { increment: skipped.length },
-      pendingCount: { increment: enqueueResult.enqueued }
+        resolvedTemplateParameters: {
+          variables: evaluated.resolvedVariables,
+          components: evaluated.components,
+          renderedTemplate: evaluated.renderedTemplate
+        },
+        eligible: eligibility.eligible,
+        status: eligibility.eligible ? "PENDING" : "SKIPPED",
+        skipReason: eligibility.eligible ? null : eligibility.reasons.join(", "),
+        sendStatus: "QUEUED"
+      });
     }
+  }
+
+  const eligible = recipientRows.filter((row) => row.eligible).length;
+  const skipped = recipientRows.length - eligible;
+  await prisma.$transaction(async (tx) => {
+    for (const row of recipientRows) {
+      await tx.campaignRecipient.upsert({
+        where: { campaignId_debtId: { campaignId: campaign.id, debtId: row.debtId } },
+        update: row,
+        create: row
+      });
+    }
+    await tx.campaign.update({
+      where: { id: campaign.id },
+      data: { eligibleCount: { increment: eligible }, skippedCount: { increment: skipped }, pendingCount: { increment: eligible } }
+    });
   });
 
   return {
-    eligible: messages.length,
-    skipped: skipped.length,
-    enqueueFailed: enqueueResult.failed
+    eligible,
+    skipped,
+    enqueueFailed: 0
   };
 }
 
@@ -1321,7 +1326,6 @@ async function processCampaignPreparation(campaignId) {
     where: { id: campaignId },
     data: {
       status: "PREPARING",
-      startedAt: existing.startedAt || new Date(),
       error: null
     }
   });
@@ -1341,31 +1345,36 @@ async function processCampaignPreparation(campaignId) {
       ? iterateAllMatchingCampaignCustomerChunks(backgroundScope, payload)
       : iterateExplicitCampaignCustomerChunks(backgroundScope, payload);
 
+    const seenCustomerIds = new Set();
     for await (const customers of iterator) {
       await prepareCampaignCustomerBatch({
         campaign,
         template,
         mappings: mappingStatus.mappings,
-        customers
+        customers,
+        seenCustomerIds
       });
     }
 
-    const refreshed = await refreshCampaignProgress(campaign.id);
-    const processedCount = refreshed.sent + refreshed.delivered + refreshed.read + refreshed.failed;
-    const finalStatus = refreshed.eligible === 0
-      ? "COMPLETED_WITH_ERRORS"
-      : processedCount >= refreshed.eligible
-        ? refreshed.failed > 0 || refreshed.skipped > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED"
-        : "RUNNING";
+    const counts = await prisma.campaignRecipient.groupBy({ by: ["status"], where: { campaignId }, _count: { _all: true } });
+    const eligibleCount = counts.find((row) => row.status === "PENDING")?._count._all || 0;
+    const skippedCount = counts.find((row) => row.status === "SKIPPED")?._count._all || 0;
+    const finalStatus = eligibleCount > 0 ? "SCHEDULED" : "FAILED";
 
     const updated = await prisma.campaign.update({
       where: { id: campaign.id },
       data: {
         status: finalStatus,
+        eligibleCount,
+        skippedCount,
+        pendingCount: eligibleCount,
         preparedAt: new Date(),
-        completedAt: terminalCampaignStatuses.has(finalStatus) ? new Date() : null
+        error: eligibleCount > 0 ? null : "No eligible recipients",
+        completedAt: finalStatus === "FAILED" ? new Date() : null
       }
     });
+
+    await recordCampaignAudit({ action: "CAMPAIGN_PREPARED", campaignId, newValue: { eligibleCount, skippedCount, status: finalStatus } });
 
     return formatCampaign(updated);
   } catch (error) {
@@ -1389,6 +1398,8 @@ async function sendBulkTemplate(user, data) {
   const mappingStatus = await loadTemplateMappingStatus(template);
   const totalSelected = await countSelectedCampaignCustomers(user, data);
   const idempotencyKey = data.idempotencyKey || null;
+  const settings = await getCampaignSettings();
+  const phone = await ensureWhatsappPhoneNumber(data.phoneNumberId || env.WHATSAPP_PHONE_NUMBER_ID);
 
   assertTemplateMappingComplete(mappingStatus);
 
@@ -1428,6 +1439,10 @@ async function sendBulkTemplate(user, data) {
         excludedCustomerIds: payload.excludedCustomerIds,
         excludedDebtIds: payload.excludedDebtIds,
         status: "QUEUED",
+        phoneNumberId: phone.phoneNumberId,
+        rateLimitPerMinute: Math.min(Number(data.rateLimitPerMinute || settings.CAMPAIGN_SEND_MAX), Number(settings.CAMPAIGN_ADMIN_MAX_PER_MINUTE)),
+        batchSize: Math.min(Number(data.batchSize || settings.CAMPAIGN_BATCH_SIZE), Number(settings.CAMPAIGN_ADMIN_MAX_BATCH_SIZE)),
+        batchDelayMs: Math.max(Number(data.batchDelayMs || settings.CAMPAIGN_BATCH_DELAY_MS), Number(settings.CAMPAIGN_ADMIN_MIN_BATCH_DELAY_MS)),
         selectedCount: totalSelected,
         pendingCount: 0,
         rawPayload: payload,
@@ -1457,6 +1472,7 @@ async function sendBulkTemplate(user, data) {
 
   try {
     await enqueueCampaignPreparation(campaign.id);
+    await recordCampaignAudit({ action: "CAMPAIGN_CREATED", actorId: user.id, campaignId: campaign.id, newValue: { selectedCount: totalSelected, templateId: template.id } });
   } catch (error) {
     await prisma.campaign.update({
       where: { id: campaign.id },

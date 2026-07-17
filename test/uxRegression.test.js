@@ -75,3 +75,38 @@ test("chat media uses authenticated message media endpoint with Range-capable ba
   assert.match(messageBubble, /URL\.createObjectURL\(blob\)/);
   assert.match(messageBubble, /جاري تحميل الوسائط/);
 });
+
+test("normal API and auth traffic is not globally rate limited and temporary failures keep the session", () => {
+  const app = read("src/app.js");
+  const rateLimitMiddleware = read("src/middleware/rateLimit.middleware.js");
+  const apiClient = read("frontend/src/lib/api.ts");
+  const authApi = read("frontend/src/api/auth.api.ts");
+  const authContext = read("frontend/src/contexts/AuthContext.tsx");
+  const queryClient = read("frontend/src/lib/queryClient.ts");
+
+  assert.doesNotMatch(app, /app\.use\("\/api(?:\/auth)?",\s*(?:generalApiLimiter|authLimiter)\)/);
+  assert.doesNotMatch(rateLimitMiddleware, /const (?:generalApiLimiter|authLimiter)\s*=/);
+  assert.match(apiClient, /status === 401 && isAuthenticatedRequest && !isLoginRequest/);
+  assert.doesNotMatch(apiClient, /status === 429[^\n]*clearSession/);
+  assert.match(authApi, /pendingMeRequest/);
+  assert.match(authContext, /Stored session validation failed without forcing logout/);
+  assert.doesNotMatch(authContext, /catch[^}]*clearSession\(\)/s);
+  assert.match(queryClient, /status === 401 \|\| status === 429/);
+});
+
+test("supervisor employee actions follow permissions and remain limited to direct reports", () => {
+  const employeeRoutes = read("src/routes/employee.routes.js");
+  const employeeController = read("src/controllers/employee.controller.js");
+  const employeeService = read("src/services/employee.service.js");
+  const employeesPage = read("frontend/src/pages/EmployeesPage.tsx");
+
+  assert.doesNotMatch(employeeRoutes, /patch\("\/:id(?:\/deactivate|\/activate)?", requireRole\("ADMIN"\)/);
+  assert.match(employeeRoutes, /patch\("\/:id", requirePermission\("employees\.edit"\)/);
+  assert.match(employeeRoutes, /patch\("\/:id\/deactivate", requirePermission\("employees\.activate_deactivate"\)/);
+  assert.match(employeeController, /data\.isActive !== undefined && !hasPermission\(req\.user, "employees\.activate_deactivate"\)/);
+  assert.match(employeeService, /employee\.supervisorId === actor\.id/);
+  assert.match(employeeService, /يمكنك إدارة الموظفين التابعين لك فقط/);
+  assert.match(employeesPage, /const canEdit = hasPermission\("employees\.edit"\);/);
+  assert.match(employeesPage, /const canToggle = hasPermission\("employees\.activate_deactivate"\);/);
+  assert.match(employeesPage, /editing && canToggle \? \{ isActive: values\.isActive \}/);
+});

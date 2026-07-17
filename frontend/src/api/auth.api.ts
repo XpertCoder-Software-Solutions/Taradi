@@ -15,6 +15,9 @@ export interface LoginResponse {
   permissions: string[];
 }
 
+type MeResponse = { user: User; role: User["role"]; permissions: string[] };
+let pendingMeRequest: Promise<MeResponse> | null = null;
+
 export async function login(payload: LoginPayload) {
   debugLog("Before login API request", {
     endpoint: "/api/auth/login",
@@ -39,5 +42,13 @@ export async function login(payload: LoginPayload) {
 }
 
 export async function me() {
-  return unwrap<{ user: User; role: User["role"]; permissions: string[] }>(await api.get("/api/auth/me"));
+  if (!pendingMeRequest) {
+    pendingMeRequest = api.get("/api/auth/me")
+      .then((response) => unwrap<MeResponse>(response))
+      .finally(() => {
+        pendingMeRequest = null;
+      });
+  }
+
+  return pendingMeRequest;
 }

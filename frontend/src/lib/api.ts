@@ -38,7 +38,12 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiFailure>) => {
-    if (error.response?.status === 401) {
+    const requestUrl = error.config?.url || "";
+    const authorization = error.config?.headers?.get?.("Authorization");
+    const isAuthenticatedRequest = typeof authorization === "string" && authorization.startsWith("Bearer ");
+    const isLoginRequest = requestUrl.includes("/api/auth/login");
+
+    if (error.response?.status === 401 && isAuthenticatedRequest && !isLoginRequest) {
       clearSession();
       window.dispatchEvent(new Event("taradi:unauthorized"));
     }

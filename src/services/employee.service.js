@@ -877,7 +877,24 @@ async function createEmployee(actorOrData, maybeData) {
   return getStaffById(employee.id);
 }
 
-async function updateEmployee(id, data) {
+function assertCanManageEmployee(actor, employee) {
+  if (actor && actor.role === "ADMIN") {
+    return;
+  }
+
+  if (
+    actor &&
+    actor.role === "SUPERVISOR" &&
+    employee.role === "EMPLOYEE" &&
+    employee.supervisorId === actor.id
+  ) {
+    return;
+  }
+
+  throw new ApiError(403, "يمكنك إدارة الموظفين التابعين لك فقط");
+}
+
+async function updateEmployee(actor, id, data) {
   const existing = await prisma.user.findUnique({
     where: { id },
     include: {
@@ -895,6 +912,18 @@ async function updateEmployee(id, data) {
 
   if (existing.role === "ADMIN") {
     throw new ApiError(400, "لا يمكن تعديل حساب المدير من مسار الموظفين");
+  }
+
+  assertCanManageEmployee(actor, existing);
+
+  if (actor.role === "SUPERVISOR") {
+    if (data.role !== undefined && data.role !== "EMPLOYEE") {
+      throw new ApiError(403, "لا يمكن للمشرف تغيير دور الموظف");
+    }
+
+    if (data.supervisorId !== undefined && data.supervisorId !== actor.id) {
+      throw new ApiError(403, "لا يمكن نقل الموظف إلى مشرف آخر");
+    }
   }
 
   const updateData = {};
@@ -996,10 +1025,10 @@ async function updateEmployee(id, data) {
   return getStaffById(employee.id);
 }
 
-async function deactivateEmployee(id) {
+async function deactivateEmployee(actor, id) {
   const existing = await prisma.user.findUnique({
     where: { id },
-    select: { role: true }
+    select: { role: true, supervisorId: true }
   });
 
   if (!existing) {
@@ -1010,11 +1039,13 @@ async function deactivateEmployee(id) {
     throw new ApiError(400, "لا يمكن تعطيل حساب المدير");
   }
 
-  return updateEmployee(id, { isActive: false });
+  assertCanManageEmployee(actor, existing);
+
+  return updateEmployee(actor, id, { isActive: false });
 }
 
-async function activateEmployee(id) {
-  return updateEmployee(id, { isActive: true });
+async function activateEmployee(actor, id) {
+  return updateEmployee(actor, id, { isActive: true });
 }
 
 async function importEmployeesFromExcel(file, actor) {

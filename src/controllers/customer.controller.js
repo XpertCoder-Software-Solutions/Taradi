@@ -3,6 +3,7 @@ const customerService = require("../services/customer.service");
 const customerImportService = require("../services/customerImport.service");
 const asyncHandler = require("../utils/asyncHandler");
 const parse = require("../utils/validation");
+const communicationPreferences = require("../services/customer-communication-preferences.service");
 
 const idParamsSchema = z.object({
   id: z.string().uuid()
@@ -109,6 +110,13 @@ const updateCollectionStatusSchema = z.object({
   resetPayment: z.boolean().optional()
 });
 
+const communicationPreferencesSchema = z.object({
+  whatsappOptIn: z.boolean(),
+  source: z.string().trim().min(1).optional(),
+  optInAt: z.string().datetime().optional(),
+  reason: z.string().trim().max(1000).optional()
+});
+
 const listCustomers = asyncHandler(async (req, res) => {
   const result = await customerService.listCustomers(req.user, req.query);
   res.success(result);
@@ -182,6 +190,13 @@ const deleteCustomer = asyncHandler(async (req, res) => {
   res.success({ deleted: true });
 });
 
+const updateCommunicationPreferences = asyncHandler(async (req, res) => {
+  const { id } = parse(idParamsSchema, req.params);
+  const data = parse(communicationPreferencesSchema, req.body);
+  const customer = await communicationPreferences.updatePreferences(id, req.user, data);
+  res.success({ customer });
+});
+
 module.exports = {
   listCustomers,
   createCustomer,
@@ -192,4 +207,5 @@ module.exports = {
   updateCollectionStatus,
   assignCustomer,
   deleteCustomer
+  ,updateCommunicationPreferences
 };

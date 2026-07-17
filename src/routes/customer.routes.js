@@ -24,6 +24,7 @@ router.post("/:customerId/debts/:debtId/archive", requirePermission("debts.archi
 router.get("/:id", requireAnyPermission("customers.view_assigned", "customers.view_team"), customerController.getCustomer);
 router.patch("/:id", requirePermission("customers.edit"), customerController.updateCustomer);
 router.patch("/:id/collection-status", requirePermission("customers.edit"), customerController.updateCollectionStatus);
+router.patch("/:id/communication-preferences", requireRole("ADMIN"), customerController.updateCommunicationPreferences);
 router.delete("/:id", requireRole("ADMIN"), customerController.deleteCustomer);
 router.patch("/:id/assign", requirePermission("customers.assign"), customerController.assignCustomer);
 router.get("/:id/messages", requireAnyPermission("chats.view_assigned", "chats.view_team"), messageController.listMessages);

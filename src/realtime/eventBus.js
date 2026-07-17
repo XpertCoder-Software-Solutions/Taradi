@@ -15,6 +15,7 @@ const allowedRealtimeEvents = new Set([
   "inbox:updated",
   "unread-count:updated",
   "notification:unread_count"
+  ,"customer:communication_preferences"
 ]);
 
 let publisherClient = null;

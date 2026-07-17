@@ -23,6 +23,7 @@ export interface CampaignExcludedCustomer {
 export type CampaignStatus =
   | "DRAFT"
   | "PREPARING"
+  | "SCHEDULED"
   | "READY"
   | "QUEUED"
   | "RUNNING"
@@ -50,8 +51,19 @@ export interface CampaignProgress {
   failed: number;
   skipped: number;
   pending: number;
+  processing: number;
+  cancelled: number;
   progressPercentage: number;
   error?: string | null;
+  pauseReason?: string | null;
+  phoneNumberId?: string | null;
+  rateLimitPerMinute?: number | null;
+  batchSize?: number | null;
+  batchDelayMs?: number | null;
+  phoneAccountStatus?: "UNKNOWN" | "ACTIVE" | "RESTRICTED" | "DISABLED" | "BANNED";
+  phoneQualityStatus?: "UNKNOWN" | "GREEN" | "YELLOW" | "RED" | "LOW";
+  phoneDisabledReason?: string | null;
+  campaignsEnabled?: boolean;
   message?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -112,4 +124,31 @@ export async function previewBulkCampaign(payload: CreateCampaignPayload & { lim
 
 export async function getCampaignProgress(campaignId: string) {
   return unwrap<CampaignProgress>(await api.get(`/api/whatsapp/templates/bulk/${campaignId}`));
+}
+
+export async function startCampaign(campaignId: string) {
+  return unwrap<CampaignProgress>(await api.post(`/api/campaigns/${campaignId}/start`));
+}
+export async function pauseCampaign(campaignId: string, reason?: string) {
+  return unwrap<CampaignProgress>(await api.post(`/api/campaigns/${campaignId}/pause`, { reason }));
+}
+export async function resumeCampaign(campaignId: string) {
+  return unwrap<CampaignProgress>(await api.post(`/api/campaigns/${campaignId}/resume`));
+}
+export async function cancelCampaign(campaignId: string, reason?: string) {
+  return unwrap<CampaignProgress>(await api.post(`/api/campaigns/${campaignId}/cancel`, { reason }));
+}
+
+export interface CampaignRecipientIssue {
+  id: string;
+  skipReason?: string | null;
+  errorMessage?: string | null;
+  errorCategory?: string | null;
+  customer: { id: string; fullName: string; phone: string };
+}
+export async function getSkippedRecipients(campaignId: string) {
+  return unwrap<{ items: CampaignRecipientIssue[]; meta: { page: number; limit: number; total: number } }>(await api.get(`/api/campaigns/${campaignId}/skipped-recipients`));
+}
+export async function getCampaignFailures(campaignId: string) {
+  return unwrap<{ items: CampaignRecipientIssue[]; meta: { page: number; limit: number; total: number } }>(await api.get(`/api/campaigns/${campaignId}/failures`));
 }

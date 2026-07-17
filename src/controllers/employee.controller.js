@@ -3,6 +3,8 @@ const employeeService = require("../services/employee.service");
 const logger = require("../config/logger");
 const asyncHandler = require("../utils/asyncHandler");
 const parse = require("../utils/validation");
+const ApiError = require("../utils/apiError");
+const { hasPermission } = require("../services/permission.service");
 
 const idParamsSchema = z.object({
   id: z.string().uuid()
@@ -90,14 +92,19 @@ const employeeImportTemplate = (req, res) => {
 const updateEmployee = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
   const data = parse(updateEmployeeSchema, req.body);
-  const employee = await employeeService.updateEmployee(id, data);
+
+  if (data.isActive !== undefined && !hasPermission(req.user, "employees.activate_deactivate")) {
+    throw new ApiError(403, "لا تملك صلاحية تفعيل أو تعطيل الموظفين");
+  }
+
+  const employee = await employeeService.updateEmployee(req.user, id, data);
 
   res.success({ employee });
 });
 
 const deactivateEmployee = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
-  const employee = await employeeService.deactivateEmployee(id);
+  const employee = await employeeService.deactivateEmployee(req.user, id);
 
   res.success({
     employee,
@@ -107,7 +114,7 @@ const deactivateEmployee = asyncHandler(async (req, res) => {
 
 const activateEmployee = asyncHandler(async (req, res) => {
   const { id } = parse(idParamsSchema, req.params);
-  const employee = await employeeService.activateEmployee(id);
+  const employee = await employeeService.activateEmployee(req.user, id);
 
   res.success({
     employee,

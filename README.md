@@ -87,19 +87,16 @@ npm run prisma:deploy
 ```env
 DATABASE_URL=postgresql://taradi:taradi_local_password@localhost:5432/taradi?schema=public
 JWT_SECRET=local-dev-jwt-secret-change-me-minimum-32-characters
+JWT_EXPIRES_IN=7d
 ADMIN_EMAIL=admin@taradiy.com
 ADMIN_PASSWORD=123456789
 PORT=4000
 CORS_ORIGIN=http://localhost:3000
 LOG_LEVEL=info
 REDIS_URL=redis://localhost:6379
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX=300
 RATE_LIMIT_REDIS_ENABLED=true
 RATE_LIMIT_REDIS_REQUIRED=false
 RATE_LIMIT_REDIS_PREFIX=taradi:rate-limit
-AUTH_RATE_LIMIT_WINDOW_MS=900000
-AUTH_RATE_LIMIT_MAX=20
 WEBHOOK_RATE_LIMIT_WINDOW_MS=60000
 WEBHOOK_RATE_LIMIT_MAX=600
 MESSAGE_RATE_LIMIT_WINDOW_MS=60000
@@ -138,7 +135,7 @@ In production, leave `RATE_LIMIT_REDIS_REQUIRED` unset or set it to `true`; star
 - PostgreSQL 16 Alpine on `localhost:5432`
 - Redis 7 Alpine on `localhost:6379`
 
-Both services use persistent named volumes and healthchecks. Redis powers BullMQ outbound WhatsApp jobs, inbound webhook jobs, and shared rate limiting.
+Both services use persistent named volumes and healthchecks. Redis powers BullMQ outbound WhatsApp jobs, inbound webhook jobs, and targeted rate limiting for sensitive operations. Login, auth checks, health checks, dashboard reads, search, and other normal API usage are not rate limited.
 
 ## Meta WhatsApp Setup
 

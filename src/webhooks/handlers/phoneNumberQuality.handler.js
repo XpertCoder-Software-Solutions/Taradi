@@ -1,4 +1,5 @@
 const logger = require("../../config/logger");
+const prisma = require("../../config/prisma");
 
 async function handlePhoneNumberQuality({ value, auditEventId }) {
   const details = {
@@ -10,6 +11,15 @@ async function handlePhoneNumberQuality({ value, auditEventId }) {
   };
 
   logger.info({ auditEventId, ...details }, "Received WhatsApp phone number quality update");
+
+  const quality = String(details.qualityRating || "UNKNOWN").toUpperCase();
+  if (details.phoneNumberId && ["UNKNOWN", "GREEN", "YELLOW", "RED", "LOW"].includes(quality)) {
+    await prisma.whatsappPhoneNumber.upsert({
+      where: { phoneNumberId: details.phoneNumberId },
+      update: { displayPhoneNumber: details.displayPhoneNumber, qualityStatus: quality, lastStatusCheckAt: new Date() },
+      create: { phoneNumberId: details.phoneNumberId, displayPhoneNumber: details.displayPhoneNumber, qualityStatus: quality, lastStatusCheckAt: new Date() }
+    });
+  }
 
   return {
     processed: 1,

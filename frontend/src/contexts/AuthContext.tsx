@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import * as authApi from "../api/auth.api";
 import {
@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [user, setUser] = useState<User | null>(() => getStoredUser());
   const [isBootstrapping, setIsBootstrapping] = useState(Boolean(getStoredToken()));
+  const shouldValidateStoredSession = useRef(Boolean(getStoredToken()));
 
   const logout = useCallback(async () => {
     debugLog("frontend logout started");
@@ -54,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let active = true;
 
     async function bootstrap() {
-      if (!token) {
+      if (!token || !shouldValidateStoredSession.current) {
         setIsBootstrapping(false);
         return;
       }
@@ -69,15 +70,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const nextUser = { ...result.user, permissions: result.permissions };
         setUser(nextUser);
         setStoredUser(nextUser);
-      } catch {
-        if (active) {
-          void disconnectSocket("auth_removed");
-          clearSession();
-          setToken(null);
-          setUser(null);
-        }
+      } catch (error) {
+        debugLog("Stored session validation failed without forcing logout", error);
       } finally {
         if (active) {
+          shouldValidateStoredSession.current = false;
           setIsBootstrapping(false);
         }
       }

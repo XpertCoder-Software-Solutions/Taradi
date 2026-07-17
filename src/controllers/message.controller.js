@@ -51,6 +51,10 @@ const bulkTemplateBaseSchema = z.object({
   excludedCustomerIds: z.array(z.string().uuid()).optional().default([]),
   excludedDebtIds: z.array(z.string().uuid()).optional().default([]),
   filters: campaignFiltersSchema
+  ,phoneNumberId: z.string().trim().min(1).optional()
+  ,rateLimitPerMinute: z.coerce.number().int().positive().optional()
+  ,batchSize: z.coerce.number().int().positive().optional()
+  ,batchDelayMs: z.coerce.number().int().nonnegative().optional()
 });
 
 function refineBulkTemplateSchema(schema) {

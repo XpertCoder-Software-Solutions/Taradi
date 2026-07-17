@@ -160,6 +160,15 @@ export interface Customer {
   notes: string | null;
   tags: string[];
   whatsappProfileName?: string | null;
+  whatsappOptIn?: boolean;
+  whatsappOptInAt?: string | null;
+  whatsappOptInSource?: string | null;
+  whatsappOptOutAt?: string | null;
+  whatsappOptOutReason?: string | null;
+  whatsappSuppressed?: boolean;
+  whatsappSuppressionReason?: string | null;
+  lastCampaignMessageAt?: string | null;
+  campaignMessageCount?: number;
   assignedToId: string | null;
   assignedTo?: User | null;
   assignedEmployeeId?: string | null;

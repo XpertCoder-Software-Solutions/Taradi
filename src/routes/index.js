@@ -8,6 +8,7 @@ const inboxRoutes = require("./inbox.routes");
 const whatsappRoutes = require("./whatsapp.routes");
 const settingsRoutes = require("./settings.routes");
 const userRoutes = require("./user.routes");
+const campaignRoutes = require("./campaign.routes");
 
 const router = express.Router();
 
@@ -20,5 +21,6 @@ router.use("/inbox", inboxRoutes);
 router.use("/whatsapp", whatsappRoutes);
 router.use("/settings", settingsRoutes);
 router.use("/users", userRoutes);
+router.use("/campaigns", campaignRoutes);
 
 module.exports = router;

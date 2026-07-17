@@ -15,8 +15,6 @@ const { ensureUploadDirectory } = require("./utils/mediaStorage");
 const { notFound, errorHandler } = require("./middleware/error.middleware");
 const responseMiddleware = require("./middleware/response.middleware");
 const {
-  generalApiLimiter,
-  authLimiter,
   webhookLimiter
 } = require("./middleware/rateLimit.middleware");
 
@@ -74,9 +72,7 @@ app.use("/uploads", (req, res) => {
   });
 });
 app.use(responseMiddleware);
-app.use("/api/auth", authLimiter);
 app.use("/api/whatsapp/webhook", webhookLimiter);
-app.use("/api", generalApiLimiter);
 
 app.get("/health", (req, res) => {
   res.success({

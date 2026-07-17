@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
-import { createCustomer, importCustomersExcel, listCustomers, updateCustomer } from "../api/customers.api";
+import { createCustomer, importCustomersExcel, listCustomers, updateCommunicationPreferences, updateCustomer } from "../api/customers.api";
 import { listEmployees } from "../api/employees.api";
 import { Avatar } from "../components/ui/Avatar";
 import { Badge } from "../components/ui/Badge";
@@ -409,6 +409,28 @@ export function CustomersPage() {
     onError: (error) => pushToast({ title: "تعذر استيراد العملاء", description: translateApiError(error), tone: "error" })
   });
 
+  const preferencesMutation = useMutation({
+    mutationFn: ({ customer, optIn }: { customer: Customer; optIn: boolean }) => updateCommunicationPreferences(customer.id, optIn ? {
+      whatsappOptIn: true,
+      source: window.prompt("أدخل مصدر الموافقة") || "ADMIN_CONFIRMED",
+      optInAt: new Date().toISOString(),
+      reason: "Manual update from customer dashboard"
+    } : {
+      whatsappOptIn: false,
+      reason: "Manual opt-out from customer dashboard"
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      pushToast({ title: "تم تحديث تفضيلات التواصل", tone: "success" });
+    },
+    onError: (error) => pushToast({ title: "تعذر تحديث تفضيلات التواصل", description: translateApiError(error), tone: "error" })
+  });
+
+  function changeCommunicationPreference(customer: Customer, optIn: boolean) {
+    const action = optIn ? "إعادة تفعيل موافقة واتساب لهذا العميل؟" : "إلغاء موافقة واتساب ومنع الحملات لهذا العميل؟";
+    if (window.confirm(action)) preferencesMutation.mutate({ customer, optIn });
+  }
+
   function openCreateModal() {
     setEditing(null);
     form.reset(defaultValues);
@@ -591,6 +613,14 @@ export function CustomersPage() {
             ${phonesHtml}
           </div>
           <div style="margin:12px 0"><b>مديونيات العميل:</b>${debtsHtml}</div>
+          <div style="margin:12px 0;border:1px solid #e5e7eb;border-radius:14px;padding:12px">
+            <b>تفضيلات تواصل واتساب</b>
+            <p>الموافقة: ${customer.whatsappOptIn ? "مفعلة" : "غير مفعلة"}</p>
+            <p>تاريخ/مصدر الموافقة: ${escapeHtml(customer.whatsappOptInAt || "غير محدد")} / ${escapeHtml(customer.whatsappOptInSource || "غير محدد")}</p>
+            <p>إلغاء الاشتراك: ${escapeHtml(customer.whatsappOptOutAt || "لا يوجد")}</p>
+            <p>الحظر: ${customer.whatsappSuppressed ? escapeHtml(customer.whatsappSuppressionReason || "محظور") : "غير محظور"}</p>
+            <p>آخر حملة: ${escapeHtml(customer.lastCampaignMessageAt || "لا يوجد")}</p>
+          </div>
           <p><b>المحصل:</b> ${escapeHtml(customerCollectorName(customer))}</p>
           <p><b>المشرف:</b> ${escapeHtml(customerSupervisorName(customer))}</p>
         </div>
@@ -747,6 +777,7 @@ export function CustomersPage() {
                     <Button variant="secondary" size="sm" icon={<ClipboardList className="h-4 w-4" />} onClick={() => showCustomerDetails(customer)}>عرض التفاصيل</Button>
                     {canEdit ? <Button variant="secondary" size="sm" icon={<Edit2 className="h-4 w-4" />} onClick={() => openEditModal(customer)}>تعديل</Button> : null}
                     {canAssign ? <Button variant="secondary" size="sm" icon={<UserCog className="h-4 w-4" />} onClick={() => openEditModal(customer)}>تغيير المحصل</Button> : null}
+                    {isAdmin ? <Button variant="secondary" size="sm" disabled={preferencesMutation.isPending} onClick={() => changeCommunicationPreference(customer, !customer.whatsappOptIn)}>{customer.whatsappOptIn ? "إلغاء موافقة واتساب" : "تفعيل موافقة واتساب"}</Button> : null}
                   </div>
                 </div>
               ))}
@@ -811,6 +842,11 @@ export function CustomersPage() {
                           {canEdit ? (
                             <Button variant="secondary" size="icon" className="h-9 w-9 rounded-lg" title="تعديل" aria-label="تعديل" onClick={() => openEditModal(customer)}>
                               <Edit2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                          {isAdmin ? (
+                            <Button variant="secondary" size="sm" disabled={preferencesMutation.isPending} title="تفضيلات واتساب" onClick={() => changeCommunicationPreference(customer, !customer.whatsappOptIn)}>
+                              {customer.whatsappOptIn ? "إلغاء الموافقة" : "تفعيل الموافقة"}
                             </Button>
                           ) : null}
                         </div>

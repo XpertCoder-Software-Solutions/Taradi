@@ -107,6 +107,15 @@ export async function deleteCustomer(id: string) {
   return unwrap<{ deleted: boolean }>(await api.delete(`/api/customers/${id}`));
 }
 
+export async function updateCommunicationPreferences(id: string, payload: {
+  whatsappOptIn: boolean;
+  source?: string;
+  optInAt?: string;
+  reason?: string;
+}) {
+  return unwrap<{ customer: Customer }>(await api.patch(`/api/customers/${id}/communication-preferences`, payload));
+}
+
 export type DebtPayload = Omit<CustomerDebt, "id" | "customerId" | "createdAt" | "updatedAt" | "isActive">;
 export async function listCustomerDebts(customerId: string) { return unwrap<{ debts: CustomerDebt[] }>(await api.get(`/api/customers/${customerId}/debts`)); }
 export async function createCustomerDebt(customerId: string, payload: Partial<DebtPayload> & Pick<DebtPayload, "accountNumber" | "debtYear" | "debtAmount">) { return unwrap<{ debt: CustomerDebt }>(await api.post(`/api/customers/${customerId}/debts`, payload)); }

@@ -15,6 +15,7 @@
     "prisma:report-debt-backfill": "node prisma/report-customer-debt-backfill.js",
     "worker:whatsapp": "node src/workers/whatsapp.worker.js",
     "worker:campaigns": "node src/workers/campaign-prepare.worker.js",
+    "worker:campaign-send": "node src/workers/campaign-send.worker.js",
     "worker:webhook": "node src/workers/whatsapp-webhook.worker.js"
   },
   "keywords": [

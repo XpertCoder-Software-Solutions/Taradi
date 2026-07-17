@@ -183,27 +183,6 @@ function createRateLimiter(policy) {
   };
 }
 
-const generalApiLimiter = createRateLimiter({
-  name: "general",
-  enabled: env.RATE_LIMIT_ENABLED,
-  windowMs: env.RATE_LIMIT_WINDOW_MS,
-  limit: env.RATE_LIMIT_MAX,
-  skip: (req) => (
-    req.originalUrl.startsWith("/api/whatsapp/webhook") ||
-    req.originalUrl.startsWith("/api/whatsapp/templates/bulk") ||
-    (req.method === "GET" && req.originalUrl.startsWith("/api/customers"))
-  )
-});
-
-const authLimiter = createRateLimiter({
-  name: "auth",
-  enabled: env.RATE_LIMIT_ENABLED && env.AUTH_RATE_LIMIT_ENABLED,
-  windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
-  limit: env.AUTH_RATE_LIMIT_MAX,
-  keyGenerator: defaultKeyGenerator,
-  message: "محاولات تسجيل الدخول كثيرة جدًا، برجاء الانتظار ثم المحاولة مرة أخرى"
-});
-
 const webhookLimiter = createRateLimiter({
   name: "webhook",
   enabled: env.RATE_LIMIT_ENABLED,
@@ -259,8 +238,6 @@ async function closeRateLimiter() {
 module.exports = {
   createRateLimiter,
   closeRateLimiter,
-  generalApiLimiter,
-  authLimiter,
   webhookLimiter,
   messageSendLimiter,
   mediaUploadLimiter,
